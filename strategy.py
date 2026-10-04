@@ -68,15 +68,20 @@ def hold_until_rebalance(w: pd.DataFrame, hour: int = REBALANCE_HOUR) -> pd.Data
 # ---------------------------------------------------------------------------
 def xs_momentum_regime(closes: pd.DataFrame, lookback: int = 336, regime_sma: int = 480,
                        top_n: int = 2) -> pd.DataFrame:
-    """Draft v0. Daily: hold the top_n coins by `lookback`-hour return (only
-    those with positive return), vol-sized. All cash whenever BTC < its SMA
-    (checked every hour)."""
+    """v1. Once a day: if BTC > its SMA, hold the top_n coins by
+    `lookback`-hour return (only those with positive return), vol-sized;
+    otherwise all cash.
+
+    v0 checked the BTC regime every hour; BTC crossed its SMA 290 times in
+    20 months and the whipsaw cost ~18% of capital in fees. Checking daily
+    halved trades and fees and improved in-sample composite 0.68 -> 0.77
+    (with the kill switch). Intraday crashes are left to the kill switch.
+    """
     mom = closes / closes.shift(lookback) - 1
     rank = mom.rank(axis=1, ascending=False)
-    selected = (rank <= top_n) & (mom > 0)
-    w = hold_until_rebalance(size_inverse_vol(selected, closes))
     on = btc_regime(closes, regime_sma)
-    return w.mul(on.astype(float), axis=0)
+    selected = (rank <= top_n) & (mom > 0) & on.to_numpy()[:, None]
+    return hold_until_rebalance(size_inverse_vol(selected, closes))
 
 
 def ema_trend(closes: pd.DataFrame, fast: int = 24, slow: int = 96) -> pd.DataFrame:
