@@ -86,7 +86,39 @@ Universe: BTC, ETH, SOL, BNB, XRP, DOGE. In-sample is 31 Oct 2024 to 4 Jul 2026;
 - The EMA trend idea planned for the Phase A baseline lost money in-sample and is dropped. Mean reversion lost in both periods.
 - The holdout has now been looked at, so it is no longer clean. Future changes need forward (live) evidence.
 
-## 6. Next steps (pending approval)
+## 6. Risk management: what's in place and whether it works
+
+Layers, from always-on to emergency:
+
+1. **Sizing by volatility:** each coin gets `25% target vol / (n coins × its 7-day vol)`. This assumes the coins move perfectly together, which is conservative.
+2. **Caps:** 25% of equity per coin, 50% in total. No leverage, no shorts.
+3. **BTC filter:** all cash while BTC is below its 20-day average, checked every hour.
+4. **Kill switch** (`risk.py`, shared by the bot and the backtest): if equity falls 8% below its peak, go to cash for 24h. It then resumes on its own with the peak reset, because the FAQ forbids manual resets.
+5. **Trailing stop per coin** (`risk.py`): sell a coin that falls 3× its daily vol below its high since entry. **Built but turned off by default**, see below.
+
+Tested with `python backtest/run_risk.py`, using the brief's default settings without tuning:
+
+| Same strategy, in-sample (20 months) | Return | Max DD | Composite | Worst 14d DD | Kill switches | Stops |
+|---|---|---|---|---|---|---|
+| No overlay | +9.1% | −22.1% | 0.42 | −8.9% | — | — |
+| **Kill switch only** | **+15.5%** | **−19.0%** | **0.68** | **−8.1%** | 7 | — |
+| Trailing stop only | +8.3% | −21.6% | 0.40 | −8.9% | — | 12 |
+| Kill + stop | +14.7% | −18.5% | 0.65 | −8.1% | 7 | 10 |
+| Kill only, at 40% vol target | +13.2% | −29.9% | 0.47 | −11.8% | 10 | — |
+
+On the holdout, neither rule fired at 25% vol (no 8% drawdown happened), so the results there are unchanged.
+
+What we learned:
+
+- **The kill switch helps:** +6 percentage points of return, 3 points less drawdown, and the composite up 60%. It caps a bad 14-day stretch at roughly 8%.
+- **It doesn't stop a slow bleed.** The worst 20-month drawdown (−22%, Jul 2025 to mid-2026) was a long grind of small losses, mostly fees and whipsaws. After each 24h cooldown the peak resets, so another 8% is allowed. It fired 4 times in that stretch and saved only about 2 points.
+- **The trailing stop hurts slightly.** Momentum picks often dip and then recover. It stays off.
+- **The 40% volatility target isn't worth it.** Drawdowns grow (−30%) with almost no extra return, because the 50% total cap and the extra fees eat the gain.
+- **The BTC filter did the heavy lifting in the worst crash.** BTC fell 20% in 72 hours (5 Feb 2026), and the strategy was already in cash.
+
+Hourly bars mean a fast crash can overshoot the 8% before the next check. The live bot checks equity every 60 seconds, not just on the hourly close, which narrows that gap.
+
+## 7. Next steps (pending approval)
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:

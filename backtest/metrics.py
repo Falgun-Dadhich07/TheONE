@@ -51,10 +51,15 @@ def rolling_windows(equity: pd.Series, days: int = 14) -> pd.DataFrame:
         m = summary(seg)
         rows.append({"start": s, "ret_%": m["total_ret_%"], "max_dd_%": m["max_dd_%"],
                      "composite": m["composite"]})
+    if not rows:  # period shorter than one window
+        return pd.DataFrame(columns=["ret_%", "max_dd_%", "composite"])
     return pd.DataFrame(rows).set_index("start")
 
 
 def window_summary(win: pd.DataFrame) -> dict:
+    if win.empty:
+        return {k: float("nan") for k in ("w14_median_ret_%", "w14_p10_ret_%", "w14_pct_losing",
+                                          "w14_median_dd_%", "w14_worst_dd_%", "w14_median_composite")}
     return {
         "w14_median_ret_%": win["ret_%"].median(),
         "w14_p10_ret_%": win["ret_%"].quantile(0.10),

@@ -42,3 +42,17 @@ def test_metrics_known_values():
     r = eq.pct_change().dropna()
     assert m["sharpe"] == pytest.approx(r.mean() / r.std() * np.sqrt(8760))
     assert m["composite"] == pytest.approx(0.4 * m["sortino"] + 0.3 * m["sharpe"] + 0.3 * m["calmar"])
+
+
+def test_engine_applies_risk_overlay():
+    from risk import RiskManager
+    # price falls 30% steadily; strategy wants 100% in; kill switch must cut losses
+    prices = list(np.linspace(100, 70, 60))
+    o = frame(prices)
+    target = frame([1.0] * 60)
+    plain = engine.run(o, o, target, initial=1000)
+    rm = RiskManager(max_drawdown=0.08, cooldown_hours=1000, stop_vol_mult=None)
+    guarded = engine.run(o, o, target, initial=1000, risk=rm)
+    assert metrics.max_drawdown(guarded.equity) > -0.10
+    assert metrics.max_drawdown(plain.equity) < -0.25
+    assert guarded.extra["risk_events"][0][1] == "KILL_SWITCH"
