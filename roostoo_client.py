@@ -4,6 +4,9 @@ Design notes
 - Every request returns HTTP 200 even on failure, so we ALWAYS check `Success`.
 - Read-only GET calls are retried on network errors. Order-placing calls are
   NOT retried automatically, because a blind retry could duplicate an order.
+- Calls are spaced at least `min_interval` seconds apart (Roostoo allows
+  30 calls/minute, queries included).
+- Timestamps can be corrected by `time_offset_ms` (server minus local clock).
 - Signed endpoints: HMAC-SHA256 over the sorted "k=v&k=v" string (query string
   for GET, request body for POST), sent in the MSG-SIGNATURE header.
 """
@@ -25,19 +28,27 @@ class RoostooError(Exception):
 
 
 class RoostooClient:
-    def __init__(self, timeout: float = 10.0, max_retries: int = 3):
+    def __init__(self, timeout: float = 10.0, max_retries: int = 3, min_interval: float = 0.0):
         self.base_url = config.BASE_URL.rstrip("/")
         self.api_key, self.secret = config.get_credentials()
         self.timeout = timeout
         self.max_retries = max_retries
         self.session = requests.Session()
+        self.min_interval = min_interval
+        self.time_offset_ms = 0
+        self._last_call = 0.0
 
     # ------------------------------------------------------------------
     # Low-level helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def _timestamp() -> str:
-        return str(int(time.time() * 1000))
+    def _timestamp(self) -> str:
+        return str(int(time.time() * 1000) + self.time_offset_ms)
+
+    def _throttle(self) -> None:
+        wait = self._last_call + self.min_interval - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call = time.monotonic()
 
     def _sign(self, params: dict) -> tuple[dict, str]:
         """Add timestamp, build the sorted param string, return (headers, total_params)."""
@@ -64,6 +75,7 @@ class RoostooClient:
         last_exc: Optional[Exception] = None
 
         for attempt in range(1, attempts + 1):
+            self._throttle()
             try:
                 if signed:
                     headers, total_params = self._sign(params)
@@ -157,6 +169,7 @@ class RoostooClient:
         order_id: Optional[int] = None,
         pair: Optional[str] = None,
         pending_only: Optional[bool] = None,
+        limit: Optional[int] = None,
     ) -> list:
         params: dict = {}
         if order_id is not None:
@@ -166,6 +179,8 @@ class RoostooClient:
                 params["pair"] = pair
             if pending_only is not None:
                 params["pending_only"] = "TRUE" if pending_only else "FALSE"
+            if limit is not None:
+                params["limit"] = str(limit)
         data = self._request("POST", "/v3/query_order", params=params, signed=True, retry=True)
         if not data.get("Success") and data.get("ErrMsg") == "no order matched":
             return []

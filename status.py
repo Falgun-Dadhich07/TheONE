@@ -1,8 +1,10 @@
 """Read-only P&L check: how much is the account worth right now?
 
 Run:  python status.py
-It never places orders. Each run appends one row to logs/equity.csv,
+It never places orders. Each run appends one row to logs/status.csv,
 so over time that file becomes your own equity curve.
+The bot writes its own logs/equity.csv; this script uses logs/status.csv.
+Do not run it against the competition account by hand (no manual API calls).
 """
 import csv
 import os
@@ -46,7 +48,7 @@ def main() -> None:
         print(f"P&L:             ${pnl:,.2f} ({pnl / initial:+.2%})")
 
     os.makedirs("logs", exist_ok=True)
-    path = os.path.join("logs", "equity.csv")
+    path = os.path.join("logs", "status.csv")
     new_file = not os.path.exists(path)
     with open(path, "a", newline="") as f:
         w = csv.writer(f)

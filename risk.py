@@ -16,12 +16,15 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-MAX_DRAWDOWN = 0.08
-COOLDOWN_HOURS = 24
-# Trailing stop is OFF by default: in backtests (backtest/run_risk.py) it fired
-# 12 times in 20 months and lowered return and composite in both periods,
-# because the momentum picks often dip and recover. Set e.g. 3.0 to enable.
-STOP_VOL_MULT = None
+import settings
+
+# Defaults live in settings.py. The trailing stop is OFF by default: in
+# backtests (backtest/run_risk.py) it fired 12 times in 20 months and lowered
+# return and composite in both periods, because momentum picks often dip and
+# recover.
+MAX_DRAWDOWN = settings.MAX_DRAWDOWN
+COOLDOWN_HOURS = settings.KILL_COOLDOWN_HOURS
+STOP_VOL_MULT = settings.STOP_VOL_MULT
 
 
 class RiskManager:

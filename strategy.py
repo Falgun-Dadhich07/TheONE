@@ -17,14 +17,16 @@ from typing import Callable, Dict
 import numpy as np
 import pandas as pd
 
+import settings
+
 HOURS_PER_YEAR = 24 * 365
 
-# Risk settings shared by every candidate. Fixed, not optimized.
-TARGET_VOL = 0.25        # annualized portfolio vol target (assumes correlation 1 = conservative)
-VOL_LOOKBACK = 168       # hours of returns used for realized vol
-MAX_PER_COIN = 0.25      # fraction of equity
-MAX_GROSS = 0.50         # total exposure cap
-REBALANCE_HOUR = 0       # UTC hour for scheduled rebalances
+# Risk settings shared by every candidate. Fixed, not optimized. Values live in settings.py.
+TARGET_VOL = settings.TARGET_VOL        # annualized vol target (assumes correlation 1 = conservative)
+VOL_LOOKBACK = settings.VOL_LOOKBACK    # hours of returns used for realized vol
+MAX_PER_COIN = settings.MAX_PER_COIN    # fraction of equity
+MAX_GROSS = settings.MAX_GROSS          # total exposure cap
+REBALANCE_HOUR = settings.REBALANCE_HOUR
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +134,7 @@ STRATEGIES: Dict[str, Callable[..., pd.DataFrame]] = {
 }
 
 
-REBALANCE_BAND = 0.05    # min |target - current| weight change worth paying fees for
+REBALANCE_BAND = settings.REBALANCE_BAND  # min |target - current| weight change worth paying fees for
 
 
 def rebalance_trades(current: Dict[str, float], target: Dict[str, float],
