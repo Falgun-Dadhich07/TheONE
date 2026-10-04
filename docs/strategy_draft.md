@@ -118,7 +118,46 @@ What we learned:
 
 Hourly bars mean a fast crash can overshoot the 8% before the next check. The live bot checks equity every 60 seconds, not just on the hourly close, which narrows that gap.
 
-## 7. Next steps (pending approval)
+## 7. Strategy lab: research-note ideas and the Hawkes strategy (`research/strategy_lab.py`)
+
+Protocol:
+- **Walk-forward:** tune with particle swarm optimisation (PSO) on 180 days, trade the next 60 days blind, roll forward 60 days. That gives 9 folds, and the out-of-sample (OOS) stretches are stitched into one run from 14 May 2025 to 4 Oct 2026.
+- **Evaluation:** the real engine, with fees, spread and the 8% kill switch.
+- **Overfitting check:** CSCV probability of backtest overfitting (PBO), using 40 random configurations per strategy family on pre-holdout data.
+
+All candidates are long-only: shorts are off, and "arbitrage" is banned.
+
+| Strategy (OOS 17 months) | Return | Max DD | Composite | Worst 14d DD | PBO |
+|---|---|---|---|---|---|
+| v1 fixed (current bot) | +4.8% | −18.8% | 0.31 | −8.1% | — |
+| v1 re-tuned by PSO each fold | −3.4% | −19.8% | −0.13 | −7.4% | 0.26 |
+| **v1 with HMM regime gate (fixed rules)** | **+6.2%** | **−15.8%** | **0.41** | **−6.3%** | — |
+| Hawkes volatility (5 params, PSO each fold) | −1.2% | −24.3% | 0.00 | −7.8% | 0.21 |
+| Kalman pairs, long-only (PSO) | −14.9% | −28.3% | −0.79 | −12.3% | 0.61 |
+| Kalman pairs, long-only + BTC gate (PSO) | −7.2% | −19.9% | −0.49 | −6.2% | 0.62 |
+| *Buy & hold BTC* | −30.0% | −59.0% | −0.52 | −26.9% | — |
+
+Findings:
+- **PSO re-tuning doesn't help.** The chosen parameters jumped every fold, often to the edge of their bounds, and a high training score said nothing about the next 60 days. Hawkes OOS folds ranged from −10.6% to +9.1%.
+- **Long-only pairs mean reversion loses money.** PBO above 0.5 means it is likely overfit. A faster Kalman filter turns the z-score into white noise (lag-24 autocorrelation ≈ 0). A slower one simply gets run over by trends.
+- **The HMM gate is the one research-note idea that helped.** It's a 2-state Gaussian HMM on BTC daily returns: refit monthly, filtered (causal) probabilities only, with the bull state labelled by its mean/vol ratio.
+
+Robustness of the HMM gate on the same OOS stretch. These are variants, not tuning; the pre-registered setting was p>0.5, refit every 30 days.
+
+| Gate | Return | Max DD | Composite | Worst 14d DD | Kill switches |
+|---|---|---|---|---|---|
+| BTC > SMA (current) | +4.8% | −18.8% | 0.31 | −8.1% | 4 |
+| HMM p>0.4 / 0.5 / 0.6, refit 30d | −0.4 / +6.2 / +18.5% | −20.8 / −15.8 / −11.3% | 0.05 / 0.41 / 1.19 | −8.3 / −6.3 / −5.8% | 6 / 3 / 2 |
+| HMM p>0.4 / 0.5 / 0.6, refit 60d | +6.1 / +11.1 / +19.0% | −17.3 / −12.2 / −11.3% | 0.38 / 0.70 / 1.21 | −8.3 / −7.5 / −5.4% | 6 / 4 / 2 |
+| **HMM p>0.5 AND BTC > SMA**, refit 30d / 60d | +7.2 / +8.6% | **−9.6 / −8.5%** | 0.58 / 0.69 | −7.7 / −6.2% | 1 / 1 |
+
+How to read this:
+- Results get monotonically better as the threshold tightens, so the HMM probability seems to carry information.
+- Picking p>0.6 would be choosing on this same OOS data, so don't.
+- Requiring **both** the HMM and the SMA to be risk-on roughly halves max drawdown in both refit settings.
+- Caveat: this is one 17-month stretch, and v1's own lookback/top-N were chosen on data overlapping it.
+
+## 8. Next steps (pending approval)
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:
