@@ -19,15 +19,15 @@ Capital is split **50/50** between two sleeves:
 
 "Risk-on" means P(bull) > 0.5 and BTC is above its average. "Risk-off" means P(bull) < 0.5 and BTC is below its average. Otherwise the momentum sleeve is in cash.
 
-**Position sizing:**
-- inverse volatility per side, aiming for 25% annualized volatility;
-- caps: 25% per coin, 50% gross (|long| + |short|);
+**Position sizing (raised for more profit on 2026-10-05, see `docs/strategy_draft.md` s.11):**
+- inverse volatility per side, aiming for 50% annualized volatility;
+- caps: 40% per coin, 100% gross (|long| + |short|), never leverage;
 - sized as a % of live total equity.
 
 **Shorts:** Roostoo 1x collateral shorts (`/v6/short_open`), with the loss capped at the collateral. If the exchange refuses shorts, the bot switches to long-only automatically.
 
 **Risk management:**
-- **kill switch:** an 8% drawdown from peak sends the bot to cash for 24h, then it resumes on its own. It's checked every minute.
+- **kill switch:** a 12% drawdown from peak sends the bot to cash for 24h, then it resumes on its own. It's checked every minute.
 - **rebalance band:** weight changes under 5 percentage points aren't traded.
 - **order limit:** at most 4 strategy orders per pair per day.
 - **no leverage.**
@@ -44,24 +44,40 @@ Setup:
 - the kill switch on;
 - Hawkes parameters re-tuned by walk-forward PSO, with each fold's parameters used only out-of-sample.
 
-| Strategy | Return | Max DD | Sharpe | Sortino | Calmar | Composite | Worst 14-day DD |
-|---|---|---|---|---|---|---|---|
-| **v3 blend** | **+18.4%** | **−12.2%** | 1.03 | 1.49 | 1.21 | **1.26** | −7.4% |
-| Momentum sleeve alone | +17.2% | −10.1% | 0.92 | 1.34 | 1.36 | 1.22 | −6.4% |
-| Hawkes sleeve alone | +24.8% | −18.5% | 1.03 | 1.48 | 1.07 | 1.22 | −10.9% |
-| v3 if shorts are refused (long-only) | +5.6% | −15.5% | 0.40 | 0.57 | 0.29 | 0.43 | −5.4% |
-| *Buy & hold BTC, May 2025 to Oct 2026* | −30.0% | −59.0% | — | — | — | −0.52 | −26.9% |
+| Strategy (deployed risk settings) | Return | Max DD | Sharpe | Sortino | Calmar | Composite |
+|---|---|---|---|---|---|---|
+| **v3 blend** | **+37.3%** | **−21.1%** | 1.09 | 1.58 | 1.40 | **1.38** |
+| Momentum sleeve alone | +25.1% | −22.1% | 0.76 | 1.10 | 0.90 | 0.94 |
+| Hawkes sleeve alone | +10.8% | −31.5% | 0.42 | 0.60 | 0.28 | 0.45 |
+| v3 if shorts are refused (long-only) | +9.6% | −26.8% | 0.42 | 0.60 | 0.29 | 0.45 |
+| *Buy & hold BTC, May 2025 to Oct 2026* | −30.0% | −59.0% | — | — | — | −0.52 |
 
-Over 14-day windows (the contest length), the blend:
-- had the same median return as Hawkes alone;
-- had a higher median composite (1.64 vs 1.12);
-- never breached the 8% kill switch.
+**Per 10 days (439 windows):**
+
+| | Return |
+|---|---|
+| Mean | +0.73% |
+| Median | +0.40% |
+| Top decile | +6.8% |
+| Bottom decile | −4.4% |
+| Best | +17.9% |
+| Worst | −10.4% |
+
+| Chance over 10 days | |
+|---|---|
+| Gain above +5% | 16% |
+| Loss worse than −5% | 6.8% |
+
+Faster trading (3- to 7-day momentum, 4- to 12-hour rebalancing) was tested and earned **less**: fees outweighed any edge.
+
+At the earlier, lower risk settings (25% volatility, 50% gross), the blend made +18.4% with a −12.2% max drawdown.
 
 Honest caveats:
 - It's one 15-month sample.
 - With a single refit calendar, the momentum sleeve's return ranged from +8.6% to +26.1%. Averaging over 6 calendars removes that luck, but it shows the uncertainty.
 - The Hawkes parameters changed a lot between walk-forward folds.
-- Fees are about 13% of capital over 15 months, at about 6 trades a day.
+- Fees are about 29% of capital over 15 months, at about 7 trades a day.
+- Fast moves can overshoot the kill switch within the hour; the worst 14-day drawdown was −14%.
 - The fallback without shorts is much weaker.
 
 ## 2. Architecture

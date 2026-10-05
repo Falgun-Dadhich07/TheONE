@@ -72,7 +72,7 @@ def main() -> None:
     d = load()
     c = d["close"]
     dqv = d["quote_volume"].resample("1D").sum(min_count=1)
-    prob = regime.hourly(regime.bull_probability(regime.daily_close_from_hourly(c["BTC"].ffill())), c.index)
+    prob = regime.hourly(regime.bull_probability_ensemble(regime.daily_close_from_hourly(c["BTC"].ffill())), c.index)
     available = c.notna() & d["high"].notna() & d["low"].notna()
     px = c.ffill()
     eligible = S.liquid_universe(available, dqv, settings.V3_TOP_N)

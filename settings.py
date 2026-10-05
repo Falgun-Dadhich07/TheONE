@@ -52,15 +52,17 @@ NON_CRYPTO = {"PAXG", "AMDB", "CBRSB", "COINB", "CRCLB", "GLWB", "GOOGLB", "INTC
               "TSLAB", "WDCB", "TON", "OMNI"}
 
 # --- Position sizing (shared with backtest) --------------------------------
-TARGET_VOL = 0.25          # annualized portfolio vol target
+# Risk level raised 2026-10-05 at the team lead's request (research/aggressive_lab.py rule pick:
+# max mean 10-day return with worst 10-day >= -12%). Was 0.25 / 0.25 / 0.50 and an 8% kill switch.
+TARGET_VOL = 0.50          # annualized portfolio vol target
 VOL_LOOKBACK = 168         # hours
-MAX_PER_COIN = 0.25        # fraction of equity
-MAX_GROSS = 0.50           # total exposure cap
+MAX_PER_COIN = 0.40        # fraction of equity
+MAX_GROSS = 1.00           # total |long| + |short| exposure cap (never leverage)
 REBALANCE_HOUR = 0         # UTC hour of the bar whose close triggers the daily rebalance
 REBALANCE_BAND = 0.05      # min weight change worth trading
 
 # --- Risk overlay (shared with backtest) -----------------------------------
-MAX_DRAWDOWN = 0.08        # kill switch: drawdown from peak equity
+MAX_DRAWDOWN = 0.12        # kill switch: drawdown from peak equity
 KILL_COOLDOWN_HOURS = 24   # cash period after the kill switch; then automatic resume
 STOP_VOL_MULT = None       # per-coin trailing stop (None = off; backtests showed it hurts)
 

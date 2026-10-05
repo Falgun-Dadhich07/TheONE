@@ -255,7 +255,36 @@ Findings:
 - **Hawkes on 20 coins is the strongest single sleeve,** but it is volatile: −18.5% max DD, a worst 14-day DD of −10.9% (beyond the 8% kill switch), and fees of 22.7% of capital.
 - **The 50/50 blend gives most of Hawkes' return with momentum's drawdown.** The two sleeves make money at different times. Its composite (1.13) is close to Hawkes alone (1.22) with two-thirds of the drawdown, and its worst 14-day DD (−7.4%) stays inside the kill switch.
 
-## 11. Next steps (pending approval)
+## 11. Higher risk for more profit (`research/aggressive_lab.py`)
+
+The team lead asked for more profit over about 10 days, with more trades and more risk. The test grid:
+
+- **Exposure:** base (25% vol, 25% per coin, 50% gross), ×1.5, or ×2 (50% vol, 40% per coin, 100% gross, never leverage).
+- **Momentum speed:** 336h / daily, 168h / 12h, or 72h / 4h.
+- **Kill switch:** 8% or 12%.
+
+The selection rule, fixed before the run: the highest **mean 10-day return** among configs whose worst 10-day return is at least −12%.
+
+Results (Jul 2025 to Oct 2026, production v3 code, real engine; full table in `data/analysis/aggressive_report.txt`):
+
+- **Faster momentum is worse at every exposure level.** 72h / 4h cut return to +4% to +10%, and fees rose to 22–43% of capital. 168h / 12h was only slightly better than daily at base exposure, and worse at higher exposure. Short-horizon crypto moves are mostly noise (see section 2).
+- **Exposure is what raises profit.**
+
+| Config | Return | Max DD | Composite | Mean 10d | 10d top-decile | Best 10d | Worst 10d | P(10d > +5%) | P(10d < −5%) |
+|---|---|---|---|---|---|---|---|---|---|
+| Base, daily, 8% kill switch (previous v3) | +18.4% | −12.2% | 1.27 | +0.37% | +3.4% | +9.2% | −5.5% | 4% | 0.5% |
+| ×1.5, daily, 8% kill switch | +30.9% | −16.9% | 1.43 | +0.62% | +5.4% | +14.9% | −7.8% | 10% | 3.2% |
+| **×2, daily, 12% kill switch (rule pick, deployed)** | **+37.4%** | **−21.1%** | **1.38** | **+0.73%** | **+6.8%** | **+17.9%** | **−10.4%** | **16%** | **6.8%** |
+
+- **The pick is profitable in both halves** of the period (+11.8%, +22.9%).
+- **Its risks:**
+  - a worst 14-day drawdown of −14%, because fast moves overshoot the 12% kill switch within the hour;
+  - fees of about 29% of capital over 15 months;
+  - Hawkes alone at ×2 is poor (+10.8%, −31.5% DD), so the 50/50 blend matters even more;
+  - the long-only fallback is weak (+9.6%, −26.8% DD).
+
+## 12. Next steps
+
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:
