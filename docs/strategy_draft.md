@@ -229,7 +229,33 @@ Findings:
   - shorting altcoins carries squeeze risk;
   - the competition account may refuse shorts.
 
-## 10. Next steps (pending approval)
+## 10. Hybrid: momentum (HMM+BTC) and Hawkes on top-20 coins (`research/hybrid_lab.py`)
+
+Two long/short sleeves run on the causal top-20 liquidity universe:
+
+- **MOM:** v2 long/short momentum.
+- **HAWKES:** per-coin signal, using the walk-forward PSO parameters where each fold's parameters are used only in that fold's out-of-sample window.
+
+The evaluation runs from 13 Jul 2025 to 4 Oct 2026, so the trailing look-back windows are already out-of-sample. It uses the real engine, the kill switch and measured spreads.
+
+| Strategy | Return | Max DD | Composite | Worst 14d DD | Trades/day | Fees | 3M return | 1M return |
+|---|---|---|---|---|---|---|---|---|
+| MOM sleeve alone | +8.7% | −11.5% | 0.64 | −6.8% | 1.0 | 7.5% | +5.6% | +4.9% |
+| HAWKES sleeve alone | +24.8% | −18.5% | 1.22 | −10.9% | 6.5 | 22.7% | +13.7% | +6.6% |
+| Per-coin pick, 30-day look-back | −7.0% | −30.0% | −0.23 | −9.4% | 4.1 | 17.4% | +4.4% | −0.4% |
+| Per-coin pick, 60-day look-back | +2.0% | −24.9% | 0.18 | −8.4% | 3.6 | 16.8% | +8.4% | +4.8% |
+| Per-coin pick, 90-day look-back | +8.9% | −19.9% | 0.51 | −8.9% | 3.5 | 16.2% | +13.3% | +4.6% |
+| **Blend 50/50 (both sleeves, half capital each)** | **+16.2%** | **−12.2%** | **1.13** | **−7.4%** | 6.3 | 12.9% | +10.0% | +4.2% |
+
+The per-coin pick follows, for each coin, the sleeve with the better trailing Sharpe on that coin, and holds no position if neither is positive.
+
+Findings:
+
+- **Picking a strategy per coin from recent performance loses** against both sleeves, and gets worse with shorter look-backs. Which sleeve "works" on a coin doesn't persist: it is performance-chasing.
+- **Hawkes on 20 coins is the strongest single sleeve,** but it is volatile: −18.5% max DD, a worst 14-day DD of −10.9% (beyond the 8% kill switch), and fees of 22.7% of capital.
+- **The 50/50 blend gives most of Hawkes' return with momentum's drawdown.** The two sleeves make money at different times. Its composite (1.13) is close to Hawkes alone (1.22) with two-thirds of the drawdown, and its worst 14-day DD (−7.4%) stays inside the kill switch.
+
+## 11. Next steps (pending approval)
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:
