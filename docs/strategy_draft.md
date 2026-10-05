@@ -283,7 +283,54 @@ Results (Jul 2025 to Oct 2026, production v3 code, real engine; full table in `d
   - Hawkes alone at ×2 is poor (+10.8%, −31.5% DD), so the 50/50 blend matters even more;
   - the long-only fallback is weak (+9.6%, −26.8% DD).
 
-## 12. Next steps
+## 12. Faster trading and limit orders (after the organizers' note on scalping, 2026-10-05)
+
+The organizers said tick scalping is not prohibited, but that finalists are judged on whether the strategy "would actually hold up in real markets", and that an edge from simulator mechanics is not high value. So faster strategies were tested only with fills a real market would give.
+
+**Roostoo limit-order mechanics** (`probe_limits.py`, test account):
+- A resting limit pays a **0.05%** maker fee and fills at the limit price when the market reaches it.
+- A limit priced through the market fills at once at the market price as a taker (0.10%).
+- A resting buy below a rising market simply never fills.
+
+**Intraday backtests** (`research/intraday_lab.py`):
+- Data: 5-minute Binance data for 25 liquid coins, Sep 2025 to Oct 2026, on 15-minute bars.
+- Protocol: walk-forward, train 90 days / test 30 days, at the deployed risk settings.
+- Two execution models: taker, and "maker". The maker model rests a limit for one bar. It fills only if the price trades *through* the limit by 1 bp (90% of the time), otherwise it chases as a taker at the bar's close.
+
+| Strategy (out-of-sample, 30 Dec 2025 to 5 Oct 2026) | Taker | Maker | Max DD | Note |
+|---|---|---|---|---|
+| Hawkes on 15m bars | −27.1% | +2.4% | −18% to −38% | Fees 22–60% of capital |
+| Channel breakout, no gate | +30.6% | +36.5% | −19% | Only slow channels profit |
+| Reversal (fade N-bar z-score) | −44.9% | −43.1% | −54% | |
+| Channel breakout, regime-gated, real engine | **+9.9%** | +15.7% (fast eval) | −21.9% | See the bug note below |
+| **Deployed v3, same dates, real engine** | **+28.9%** | — | −21.1% | Composite 1.71 |
+
+**Bug found and fixed.** The first run reported the gated breakout at +77% (taker) and +92% (maker). The BTC > SMA gate had been built from hourly closes labeled at the hour's start and forward-filled onto 15-minute bars, so the gate saw up to 45 minutes ahead. `research/breakout_check.py` rebuilds it causally: the return falls to +5% in the fast evaluator and +9.9% in the real engine. The v3 production code never had this issue, because its hourly gate is used at bar close and is covered by causality tests.
+
+Further checks in `breakout_check.py`:
+- Only 9 of 24 channel lengths were profitable, and all of those were 2 days or longer.
+- Every channel under a day lost 20–95%.
+- Leave-one-coin-out results range from +4% (without WLD) to +28% (without ZEC).
+
+**Slow trend sleeve next to v3** (`research/trend_sleeve.py`, hourly, 2 years, real engine):
+- A regime-gated channel breakout with a walk-forward channel of 48–336h made +2.9% with a −26% max drawdown on its own.
+- Every blend with v3 was worse than v3 alone (v3 +37.1%; blends +1.9% to +23.5%).
+- Its daily correlation with v3 is 0.64, so it is not a new return source.
+
+**Limit-order execution of v3's own trades.** 2,738 trades were replayed on 5-minute data, with trade-through fills:
+
+| Execution | Fill rate | All-in cost per trade |
+|---|---|---|
+| Market order (current) | 100% | 12.5 bp |
+| Limit for 15 min, then market | 90% | 9.7 bp |
+| Limit for 30 min, then market | 93% | 9.8 bp |
+| Limit for 60 min, then market | 95% | 10.0 bp |
+
+Unfilled orders had moved 40–83 bp against us by the time we chased. The saving is about 5.7% of capital over 13 months, or about +0.15% per 10 days. It is real but small, and it needs new live order-management code.
+
+**Conclusion.** Trading faster loses money after costs in every family tested. v3 as deployed remains the best strategy found. The only validated improvement is passive execution, worth about +0.15% per 10 days.
+
+## 13. Next steps
 
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
