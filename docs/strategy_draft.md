@@ -395,7 +395,24 @@ Costs and risks of v4:
 - One coin can be 50% of equity, when the Hawkes sleeve has a single active signal.
 - The long-only fallback, if shorts are refused, is +9% with a -28% max DD.
 
-## 15. Next steps
+## 15. Tick scalping on wide-tick coins (`research/tick_scalp.py`, 2026-10-05)
+
+The leaderboard leader (+6.0% on 2026-10-05) rests limit buys and sells one tick apart on STO and PEPE, where one tick is about 0.25% of the price. The idea was replayed on 30 days of Binance 1-minute bars: rest a buy one tick below the last close, sell one tick higher, stop out 2 ticks lower. Fees are 0.05% per resting fill and 0.10% for the market exit.
+
+| Coin (tick size) | Fill at touch (simulator, no queue) | Fill only on trade-through (real market) |
+|---|---|---|
+| PEPE (23 bp) | +53% of notional per day | -19% per day |
+| BONK (26 bp) | +33% per day | -18% per day |
+| SHIB (17 bp) | +12% per day | -15% per day |
+| WLFI (18 bp) | +1.5% per day | -9% per day |
+| STO (25 bp) | -5.6% per day | -6.4% per day |
+| DOGE, BTC (1 bp or less) | -76% to -83% per day | -69% to -80% per day |
+
+The whole edge is the fill assumption. With a real order queue the same orders lose on every coin and on almost every day. This is also market making, which the brief bans, and the organizers said an edge from simulator mechanics is not valued when finalists are judged. **Rejected.**
+
+v4's signal was also run at v3's exposure (vol 0.50, 40% per coin): +37.5%, -20.5% max DD, composite 1.43, against v3's +36.7%, -21.1%, 1.36. So nearly all of v4's extra return comes from exposure, not from the ranking.
+
+## 16. Next steps
 
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
