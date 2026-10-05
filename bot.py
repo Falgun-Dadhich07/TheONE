@@ -37,7 +37,7 @@ from execution import (Executor, Order, ShortsNotAllowed, cap_buys_to_cash, plan
 from market_data import HourlyBars
 from market_data_v3 import MarketData
 from risk import RiskManager
-from roostoo_client import RoostooClient, RoostooError
+from roostoo_client import RoostooClient
 
 log = logging.getLogger("bot")
 MIN_BARS_V1 = max(settings.STRATEGY_PARAMS.get("regime_sma", 480),
@@ -204,10 +204,10 @@ class Bot:
         wallet = self.client.balance()
         shorts: List[dict] = []
         if self.v3:
-            try:
-                shorts = self.client.short_positions()
-            except RoostooError as exc:
-                log.warning("short_positions failed: %s", exc)
+            # If this fails we must NOT carry on as if there were no shorts: equity would be
+            # wrong and the planner could open duplicate shorts. Abort the cycle (the main
+            # loop backs off and retries), so we never trade on an incomplete picture.
+            shorts = self.client.short_positions()
         equity, total, free = value_portfolio(wallet, prices, settings.QUOTE, shorts=shorts)
         book = short_book(shorts, settings.QUOTE)
         usd_free = float(wallet.get(settings.QUOTE, {}).get("Free", 0) or 0)
