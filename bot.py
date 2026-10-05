@@ -1,8 +1,15 @@
 """TheONE: autonomous Roostoo trading bot.
 
-Every ~60s:   ticker (1 call) + balance (1 call) -> equity, logs, kill-switch check
+Every ~60s:   ticker + balance (+ short positions) -> equity, logs, kill-switch check
 Each new hourly bar close:  strategy target -> risk overlay -> rebalance orders
 Daily:        activity guarantee (smallest valid round trip if too few trades)
+
+Strategy (settings.STRATEGY):
+  v3 (default): 50/50 blend of HMM+SMA-gated long/short momentum and Hawkes
+                long/short on the 20 most liquid coins. Shorts are Roostoo 1x
+                collateral shorts; if the exchange refuses them, the bot
+                switches to long-only automatically and remembers it.
+  v1          : original long-only momentum on 6 majors (rollback option).
 
 Run:   python bot.py            (DRY_RUN comes from .env, default true)
 Stop:  Ctrl+C (finishes the current step, saves state, exits)
@@ -16,22 +23,25 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 import config
+import regime
 import settings
 import strategy
-from execution import Executor, Order, cap_buys_to_cash, plan_orders, round_down, value_portfolio
+from execution import (Executor, Order, ShortsNotAllowed, cap_buys_to_cash, plan_orders, round_down,
+                       short_book, value_portfolio)
 from market_data import HourlyBars
+from market_data_v3 import MarketData
 from risk import RiskManager
-from roostoo_client import RoostooClient
+from roostoo_client import RoostooClient, RoostooError
 
 log = logging.getLogger("bot")
-MIN_BARS = max(settings.STRATEGY_PARAMS.get("regime_sma", 480),
-               settings.STRATEGY_PARAMS.get("lookback", 336)) + settings.VOL_LOOKBACK
+MIN_BARS_V1 = max(settings.STRATEGY_PARAMS.get("regime_sma", 480),
+                  settings.STRATEGY_PARAMS.get("lookback", 336)) + settings.VOL_LOOKBACK
 
 
 # ---------------------------------------------------------------------------
@@ -51,18 +61,45 @@ def competition_allowed(mode: str, dry_run: bool, platform: str, confirm: Option
     return not platform.startswith("win") and confirm == settings.COMPETITION_CONFIRM_VALUE
 
 
+def crypto_coins(rules: Dict, quote: str = "USD") -> List[str]:
+    return sorted(p.split("/")[0] for p in rules if p.endswith("/" + quote)
+                  and p.split("/")[0] not in settings.NON_CRYPTO)
+
+
+def v3_target(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, daily_qv: pd.DataFrame,
+              bull_by_day: Dict[pd.Timestamp, float], allow_shorts: bool) -> Dict[str, float]:
+    """Last row of strategy.v3_weights on live data.
+
+    bull_by_day maps a completed UTC day d -> P(bull) using returns up to d;
+    it applies to the hours of day d+1, exactly like the backtest. An empty
+    row is added for today so the liquidity ranking sees yesterday's volume
+    on the same schedule as the backtest (which resamples partial days).
+    """
+    today = close.index[-1].normalize()
+    dqv = daily_qv.reindex(daily_qv.index.union(pd.DatetimeIndex([today])))
+    prob = regime.hourly(pd.Series(bull_by_day, dtype=float).sort_index(), close.index)
+    w = strategy.v3_weights(close, high, low, dqv, prob, settings.HAWKES_PARAMS, settings.V3_HAWKES_SHARE,
+                            settings.V3_TOP_N, settings.V3_REGIME_SMA, allow_shorts=allow_shorts)
+    row = w.iloc[-1]
+    return {c: float(v) for c, v in row.items() if abs(v) > 1e-6}
+
+
 # ---------------------------------------------------------------------------
 class Bot:
     def __init__(self):
         self.stop = False
         self.client = RoostooClient(min_interval=settings.API_MIN_INTERVAL_S)
         self.exec = Executor(self.client, config.MODE, settings.DRY_RUN)
-        self.bars = HourlyBars(settings.UNIVERSE)
+        self.v3 = settings.STRATEGY == "v3"
+        self.bars: Optional[HourlyBars] = None
+        self.md: Optional[MarketData] = None
         self.risk = RiskManager(settings.MAX_DRAWDOWN, settings.KILL_COOLDOWN_HOURS, settings.STOP_VOL_MULT)
         self.target: Dict[str, float] = {}
         self.day = ""
         self.fills_today = 0
         self.strategy_orders_today: Dict[str, int] = {}
+        self.shorts_disabled = not settings.ALLOW_SHORTS
+        self.bull_by_day: Dict[str, float] = {}
         self.needs_rebalance = True           # sync with the exchange right after startup
         self.equity_log = os.path.join(settings.LOG_DIR, "equity.csv")
 
@@ -79,21 +116,25 @@ class Bot:
         self.day = s.get("day", "")
         self.fills_today = s.get("fills_today", 0)
         self.strategy_orders_today = s.get("strategy_orders_today", {})
-        log.info("state loaded: day=%s fills_today=%d risk=%s", self.day, self.fills_today, s.get("risk"))
+        self.shorts_disabled = self.shorts_disabled or bool(s.get("shorts_disabled", False))
+        self.bull_by_day = s.get("bull_by_day", {})
+        log.info("state loaded: day=%s fills_today=%d shorts_disabled=%s risk=%s", self.day, self.fills_today,
+                 self.shorts_disabled, s.get("risk"))
 
     def save_state(self) -> None:
         os.makedirs(os.path.dirname(settings.STATE_FILE), exist_ok=True)
         tmp = settings.STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({"mode": config.MODE, "risk": self.risk.to_dict(), "day": self.day,
-                       "fills_today": self.fills_today,
-                       "strategy_orders_today": self.strategy_orders_today}, f, indent=1)
+            json.dump({"mode": config.MODE, "strategy": settings.STRATEGY, "risk": self.risk.to_dict(),
+                       "day": self.day, "fills_today": self.fills_today,
+                       "strategy_orders_today": self.strategy_orders_today,
+                       "shorts_disabled": self.shorts_disabled, "bull_by_day": self.bull_by_day}, f, indent=1)
         os.replace(tmp, settings.STATE_FILE)
 
     # ---------------- startup ----------------
     def startup(self) -> None:
-        log.info("=== TheONE starting | mode=%s DRY_RUN=%s strategy=%s %s ===", config.MODE,
-                 settings.DRY_RUN, settings.STRATEGY, settings.STRATEGY_PARAMS)
+        log.info("=== TheONE starting | mode=%s DRY_RUN=%s strategy=%s shorts=%s ===", config.MODE,
+                 settings.DRY_RUN, settings.STRATEGY, settings.ALLOW_SHORTS)
         server_ms = self.client.server_time()
         skew = server_ms - int(time.time() * 1000)
         self.client.time_offset_ms = skew if abs(skew) > 1000 else 0
@@ -101,25 +142,43 @@ class Bot:
         if abs(skew) > settings.MAX_CLOCK_SKEW_MS:
             log.warning("clock skew is large; check NTP on this machine")
         self.exec.load_rules()
-        missing = [c for c in settings.UNIVERSE if f"{c}/{settings.QUOTE}" not in self.exec.rules]
-        if missing:
-            raise RuntimeError(f"pairs not on exchange: {missing}")
-        log.info("warmup: %s", self.bars.warmup())
         self.load_state()
+        if self.v3:
+            coins = crypto_coins(self.exec.rules, settings.QUOTE)
+            self.md = MarketData(coins)
+            log.info("warmup (%d coins): %s", len(coins), self.md.warmup())
+            self.refresh_regime()
+        else:
+            missing = [c for c in settings.UNIVERSE if f"{c}/{settings.QUOTE}" not in self.exec.rules]
+            if missing:
+                raise RuntimeError(f"pairs not on exchange: {missing}")
+            self.bars = HourlyBars(settings.UNIVERSE)
+            log.info("warmup: %s", self.bars.warmup())
+
+    def refresh_regime(self) -> None:
+        """P(bull) for the last 3 completed days (only days not computed yet; ~7s each)."""
+        btc = self.md.daily_close["BTC"].dropna()
+        for d in btc.index[-3:]:
+            key = d.strftime("%Y-%m-%d")
+            if key not in self.bull_by_day:
+                self.bull_by_day[key] = regime.latest_bull_probability(btc.loc[:d])
+                log.info("HMM P(bull) for %s = %.3f", key, self.bull_by_day[key])
+        for k in sorted(self.bull_by_day)[:-10]:
+            del self.bull_by_day[k]
 
     # ---------------- logging ----------------
-    def log_equity(self, now: datetime, equity: float, usd: float, exposure: float) -> None:
+    def log_equity(self, now: datetime, equity: float, usd: float, long_x: float, short_x: float) -> None:
         new = not os.path.exists(self.equity_log)
         peak = self.risk.peak or equity
         with open(self.equity_log, "a", newline="") as f:
             w = csv.writer(f)
             if new:
                 w.writerow(["utc_time", "mode", "dry_run", "equity", "usd", "exposure_pct", "peak",
-                            "drawdown_pct", "halted", "fills_today"])
+                            "drawdown_pct", "halted", "fills_today", "short_exposure_pct"])
             w.writerow([now.isoformat(timespec="seconds"), config.MODE, settings.DRY_RUN, round(equity, 2),
-                        round(usd, 2), round(exposure * 100, 2), round(peak, 2),
+                        round(usd, 2), round(long_x * 100, 2), round(peak, 2),
                         round((equity / peak - 1) * 100, 3), self.risk.halted_until is not None,
-                        self.fills_today])
+                        self.fills_today, round(short_x * 100, 2)])
 
     # ---------------- one cycle ----------------
     def cycle(self) -> None:
@@ -133,52 +192,72 @@ class Bot:
         tick = self.client.ticker()
         prices = {p.split("/")[0]: float(t["LastPrice"]) for p, t in tick.items()
                   if p.endswith("/" + settings.QUOTE) and t.get("LastPrice")}
-        self.bars.on_poll(ts, prices)
-        new_bars = self.bars.close_completed_bars(ts)
+        data = self.md if self.v3 else self.bars
+        data.on_poll(ts, prices)
+        new_bars = data.close_completed_bars(ts)
         if new_bars:
-            log.info("bar closed: %s", ", ".join(f"{b:%m-%d %H}h" for b in new_bars))
+            log.info("bar closed: %s", ", ".join(f"{b:%m-%d %H}h" for b in new_bars[-3:]))
+            if self.v3:
+                self.refresh_regime()
             self.needs_rebalance = True
 
         wallet = self.client.balance()
-        equity, total, free = value_portfolio(wallet, prices, settings.QUOTE)
+        shorts: List[dict] = []
+        if self.v3:
+            try:
+                shorts = self.client.short_positions()
+            except RoostooError as exc:
+                log.warning("short_positions failed: %s", exc)
+        equity, total, free = value_portfolio(wallet, prices, settings.QUOTE, shorts=shorts)
+        book = short_book(shorts, settings.QUOTE)
         usd_free = float(wallet.get(settings.QUOTE, {}).get("Free", 0) or 0)
-        held_val = sum(total.get(c, 0) * prices.get(c, 0) for c in settings.UNIVERSE)
+        long_val = sum(q * prices.get(c, 0) for c, q in total.items())
+        short_val = sum(s["value"] for s in book.values())
 
-        # strategy target, recomputed whenever a bar closes
         if self.needs_rebalance:
-            if self.bars.ready(MIN_BARS):
-                self.target = strategy.latest_weights(settings.STRATEGY, self.bars.closes,
-                                                      **settings.STRATEGY_PARAMS)
-            else:
-                log.warning("not enough bars yet (%d < %d); strategy idle", len(self.bars.closes), MIN_BARS)
-                self.target = {}
+            self.target = self.compute_target()
 
-        # risk overlay every cycle so the kill switch reacts within a minute
-        dvol = (strategy.realized_vol(self.bars.closes).iloc[-1] / np.sqrt(365)).to_dict() \
-            if len(self.bars.closes) > settings.VOL_LOOKBACK else {}
+        dvol = {}
+        closes = self.md.close if self.v3 else self.bars.closes
+        if len(closes) > settings.VOL_LOOKBACK:
+            dvol = (strategy.realized_vol(closes.ffill()).iloc[-1] / np.sqrt(365)).to_dict()
         n_events = len(self.risk.events)
-        held_qty = {c: total[c] for c in settings.UNIVERSE if c in total}
-        adjusted = self.risk.apply(ts, equity, self.target, prices, held_qty, dvol)
+        adjusted = self.risk.apply(ts, equity, self.target, prices, dict(total), dvol)
         for ev in self.risk.events[n_events:]:
             log.warning("RISK EVENT %s %s equity=%.2f peak=%s", ev[1], ev[2] or "", equity, self.risk.peak)
             self.needs_rebalance = True
 
-        self.log_equity(now, equity, usd_free, held_val / equity if equity else 0)
+        self.log_equity(now, equity, usd_free, long_val / equity if equity else 0,
+                        short_val / equity if equity else 0)
 
         if self.needs_rebalance:
             log.info("equity $%.2f | target %s | adjusted %s", equity,
                      {k: round(v, 3) for k, v in self.target.items()},
                      {k: round(v, 3) for k, v in adjusted.items()})
-            self.rebalance(adjusted, total, free, prices, equity, usd_free)
+            self.rebalance(adjusted, total, free, prices, equity, usd_free, book)
             self.needs_rebalance = False
 
         self.activity_guarantee(now, prices)
         self.save_state()
 
-    def rebalance(self, target, total, free, prices, equity, usd_free) -> None:
-        universe_total = {c: q for c, q in total.items() if c in settings.UNIVERSE}
-        orders, skips = plan_orders(target, universe_total, free, prices, equity, self.exec.rules,
-                                    quote=settings.QUOTE)
+    def compute_target(self) -> Dict[str, float]:
+        if self.v3:
+            if not self.md.ready():
+                log.warning("market data not ready; strategy idle")
+                return {}
+            bull = {pd.Timestamp(k, tz="UTC"): v for k, v in self.bull_by_day.items()}
+            return v3_target(self.md.close, self.md.high, self.md.low, self.md.daily_qv, bull,
+                             allow_shorts=not self.shorts_disabled)
+        if not self.bars.ready(MIN_BARS_V1):
+            log.warning("not enough bars yet (%d < %d); strategy idle", len(self.bars.closes), MIN_BARS_V1)
+            return {}
+        return strategy.latest_weights("xs_momentum_regime", self.bars.closes, **settings.STRATEGY_PARAMS)
+
+    def rebalance(self, target, total, free, prices, equity, usd_free, book) -> None:
+        if not self.v3:
+            total = {c: q for c, q in total.items() if c in settings.UNIVERSE}
+        orders, skips = plan_orders(target, total, free, prices, equity, self.exec.rules,
+                                    quote=settings.QUOTE, shorts=book)
         orders, more = cap_buys_to_cash(orders, usd_free, self.exec.rules)
         for s in skips + more:
             self.exec.log_skip(s)
@@ -187,12 +266,23 @@ class Bot:
         for o in orders:
             if self.stop:
                 break
-            is_exit = o.side == "SELL" and target.get(o.pair.split("/")[0], 0) <= 0
+            coin = o.pair.split("/")[0]
+            is_exit = (o.side == "SELL" and target.get(coin, 0) <= 0) or \
+                      (o.side == "SHORT_CLOSE" and target.get(coin, 0) >= 0)
             n = self.strategy_orders_today.get(o.pair, 0)
             if not is_exit and n >= settings.MAX_STRATEGY_ORDERS_PER_PAIR_PER_DAY:
                 self.exec.log_skip(f"{o.pair}: daily order limit reached ({n}) [{o.reason}]")
                 continue
-            filled = self.exec.execute(o)
+            if o.side == "SHORT_OPEN" and self.shorts_disabled:
+                self.exec.log_skip(f"{o.pair}: shorts disabled [{o.reason}]")
+                continue
+            try:
+                filled = self.exec.execute(o)
+            except ShortsNotAllowed:
+                self.shorts_disabled = True
+                self.needs_rebalance = True     # recompute a long-only target next cycle
+                self.save_state()
+                continue
             self.strategy_orders_today[o.pair] = n + 1
             if filled:
                 self.fills_today += 1

@@ -157,3 +157,109 @@ def latest_weights(name: str, closes: pd.DataFrame, **params) -> Dict[str, float
     """What the live bot calls after each hourly close: the last row of weights."""
     row = STRATEGIES[name](closes, **params).iloc[-1]
     return {coin: float(w) for coin, w in row.items() if w > 0}
+
+
+# ---------------------------------------------------------------------------
+# v3: 50/50 blend of regime-gated long/short momentum and Hawkes volatility
+# breakouts on the 20 most liquid coins (research: docs/strategy_draft.md s.9-10)
+# Weights are signed: negative = Roostoo 1x short.
+# ---------------------------------------------------------------------------
+def size_long_short(sel_long: pd.DataFrame, sel_short: pd.DataFrame, closes: pd.DataFrame) -> pd.DataFrame:
+    """Inverse-vol size each side, combine signed, cap gross |w| at MAX_GROSS."""
+    w = size_inverse_vol(sel_long, closes) - size_inverse_vol(sel_short, closes)
+    gross = w.abs().sum(axis=1)
+    return w.mul((MAX_GROSS / gross).where(gross > MAX_GROSS, 1.0), axis=0)
+
+
+def liquid_universe(available: pd.DataFrame, daily_quote_volume: pd.DataFrame, top_n: int = 20,
+                    min_history_h: int = 60 * 24, window_days: int = 30) -> pd.DataFrame:
+    """Hourly eligibility: coin has a price now, >= min_history_h hours of history,
+    and ranks in the top_n by trailing median daily quote volume, using only
+    days that have fully ended (causal)."""
+    med = daily_quote_volume.rolling(window_days, min_periods=20).median().shift(1)
+    med.index = med.index.normalize()
+    rank = med.rank(axis=1, ascending=False).reindex(available.index, method="ffill")
+    rank = rank.reindex(columns=available.columns)
+    history = available.cumsum()
+    return available & (history >= min_history_h) & (rank <= top_n)
+
+
+def momentum_long_short(closes: pd.DataFrame, eligible: pd.DataFrame, risk_on: pd.Series,
+                        risk_off: pd.Series, lookback: int = 336, k: int = 2) -> pd.DataFrame:
+    """Daily: long the top-k eligible coins by `lookback`-hour return (if > 0)
+    while risk_on; short the bottom-k (if < 0) while risk_off; else cash."""
+    mom = (closes / closes.shift(lookback) - 1).where(eligible)
+    top = (mom.rank(axis=1, ascending=False) <= k) & (mom > 0) & risk_on.to_numpy()[:, None]
+    bot = (mom.rank(axis=1, ascending=True) <= k) & (mom < 0) & risk_off.to_numpy()[:, None]
+    return hold_until_rebalance(size_long_short(top, bot, closes))
+
+
+def hawkes_volatility(high: np.ndarray, low: np.ndarray, close: np.ndarray, kappa: float,
+                      norm_lookback: int) -> np.ndarray:
+    """kappa * Hawkes-smoothed (high - low) / ATR, all in log prices. Arrays are T x N."""
+    lh, ll, lc = np.log(high), np.log(low), np.log(close)
+    prev = np.vstack([np.full((1, lc.shape[1]), np.nan), lc[:-1]])
+    tr = np.fmax(lh - ll, np.fmax(np.abs(lh - prev), np.abs(ll - prev)))
+    atr = pd.DataFrame(tr).ewm(alpha=1.0 / norm_lookback, adjust=False, min_periods=norm_lookback).mean().to_numpy()
+    norm_range = (lh - ll) / atr
+    alpha = np.exp(-kappa)
+    out = np.full_like(norm_range, np.nan)
+    for i in range(1, len(norm_range)):
+        p = out[i - 1]
+        out[i] = np.where(np.isnan(p), norm_range[i], p * alpha + norm_range[i])
+    return out * kappa
+
+
+def hawkes_signal(v: np.ndarray, close: np.ndarray, signal_lookback: int, perc5: float,
+                  perc95: float) -> np.ndarray:
+    """+1 / -1 / 0 per coin. After volatility was quiet (below its perc5 quantile),
+    a breakout above the perc95 quantile goes long if price rose since the quiet
+    point, short if it fell; a new quiet spell resets to flat."""
+    vdf = pd.DataFrame(v)
+    q05 = vdf.rolling(signal_lookback).quantile(perc5).to_numpy()
+    q95 = vdf.rolling(signal_lookback).quantile(perc95).to_numpy()
+    T, N = v.shape
+    sig = np.zeros((T, N))
+    last_below = np.full(N, -1)
+    cur = np.zeros(N)
+    for i in range(1, T):
+        below = v[i] < q05[i]
+        last_below = np.where(below, i, last_below)
+        cur = np.where(below, 0.0, cur)
+        cross = (v[i] > q95[i]) & (v[i - 1] <= q95[i - 1]) & (last_below > 0)
+        if cross.any():
+            idx = np.where(cross)[0]
+            cur[idx] = np.where(close[i, idx] - close[last_below[idx], idx] > 0, 1.0, -1.0)
+        sig[i] = cur
+    return sig
+
+
+def hawkes_long_short(high: pd.DataFrame, low: pd.DataFrame, closes: pd.DataFrame, eligible: pd.DataFrame,
+                      kappa: float, norm_lookback: int, signal_lookback: int, perc5: float,
+                      perc95: float) -> pd.DataFrame:
+    v = hawkes_volatility(high.to_numpy(), low.to_numpy(), closes.to_numpy(), kappa, int(norm_lookback))
+    sig = pd.DataFrame(hawkes_signal(v, closes.to_numpy(), int(signal_lookback), perc5, perc95),
+                       index=closes.index, columns=closes.columns).where(eligible, 0.0)
+    return size_long_short(sig > 0, sig < 0, closes)
+
+
+def v3_blend(momentum_w: pd.DataFrame, hawkes_w: pd.DataFrame, hawkes_share: float = 0.5) -> pd.DataFrame:
+    return hawkes_share * hawkes_w + (1 - hawkes_share) * momentum_w
+
+
+def v3_weights(closes: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, daily_quote_volume: pd.DataFrame,
+               bull_prob_hourly: pd.Series, hawkes_params: Dict[str, float], hawkes_share: float = 0.5,
+               top_n: int = 20, regime_sma: int = 480, allow_shorts: bool = True) -> pd.DataFrame:
+    """Full v3 target weights (signed). Causal: row t uses data up to bar t only."""
+    available = closes.notna() & high.notna() & low.notna()
+    px = closes.ffill()
+    eligible = liquid_universe(available, daily_quote_volume, top_n)
+    sma = btc_regime(px, regime_sma)
+    on = (bull_prob_hourly > 0.5).fillna(False) & sma
+    off = (bull_prob_hourly < 0.5).fillna(False) & ~sma
+    mom = momentum_long_short(px, eligible, on, off)
+    hawk = hawkes_long_short(high.ffill(), low.ffill(), px, eligible, **hawkes_params)
+    w = v3_blend(mom, hawk, hawkes_share)
+    if not allow_shorts:
+        w = w.clip(lower=0.0)
+    return w.fillna(0.0)

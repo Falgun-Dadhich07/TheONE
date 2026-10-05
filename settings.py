@@ -29,10 +29,27 @@ DRY_RUN = _env_bool("DRY_RUN", True)          # default SAFE: log orders, send n
 COMPETITION_CONFIRM_VALUE = "yes-on-ec2"
 
 # --- Universe & strategy ----------------------------------------------------
-UNIVERSE = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]
+# STRATEGY = "v3"  : 50/50 blend of HMM+SMA-gated long/short momentum and Hawkes
+#                    long/short on the 20 most liquid coins (docs/strategy_draft.md s.9-10)
+# STRATEGY = "v1"  : original long-only momentum on the 6 majors (rollback option)
+STRATEGY = os.getenv("STRATEGY", "v3").strip().lower()
+UNIVERSE = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]       # v1 universe
 QUOTE = "USD"
-STRATEGY = "xs_momentum_regime"
-STRATEGY_PARAMS = {"lookback": 336, "regime_sma": 480, "top_n": 2}
+STRATEGY_PARAMS = {"lookback": 336, "regime_sma": 480, "top_n": 2}   # v1
+
+# v3
+V3_TOP_N = 20                 # liquid universe size (trailing 30-day median Binance volume)
+V3_REGIME_SMA = 480           # BTC SMA gate, hours
+V3_HAWKES_SHARE = 0.5         # capital split: 0.5 Hawkes / 0.5 momentum
+ALLOW_SHORTS = _env_bool("ALLOW_SHORTS", True)
+# Tuned by research/tune_hawkes.py on 2026-04-07..2026-10-04 (majors, PSO, composite objective).
+# Re-tune about every 60 days (the tested walk-forward step).
+HAWKES_PARAMS = {"kappa": 0.016, "norm_lookback": 244, "signal_lookback": 479,
+                 "perc5": 0.01, "perc95": 0.99}
+# Not crypto or no Binance price source: never traded by v3.
+NON_CRYPTO = {"PAXG", "AMDB", "CBRSB", "COINB", "CRCLB", "GLWB", "GOOGLB", "INTCB", "LITEB", "METAB",
+              "MSFTB", "MSTRB", "MUB", "NBISB", "NVDAB", "PLTRB", "QCOMB", "SKHYB", "SNDKB", "SPCXB",
+              "TSLAB", "WDCB", "TON", "OMNI"}
 
 # --- Position sizing (shared with backtest) --------------------------------
 TARGET_VOL = 0.25          # annualized portfolio vol target
@@ -69,7 +86,7 @@ BINANCE_KLINES_URLS = [
     "https://data-api.binance.vision/api/v3/klines",
     "https://api.binance.com/api/v3/klines",
 ]
-WARMUP_HOURS = 1000                  # strategy needs ~816h (480h SMA + 336h momentum)
+WARMUP_HOURS = 1500                  # v3 Hawkes needs ~1000h (ATR 244h + quantiles 479h + vol 168h) to settle
 
 # --- Files ------------------------------------------------------------------
 LOG_DIR = "logs"

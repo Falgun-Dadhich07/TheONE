@@ -5,7 +5,8 @@ planning. The Executor sends orders and logs every request and response to
 logs/orders.csv.
 
 Order safety rules:
-  * place_order is never retried automatically (it could duplicate an order).
+  * place_order / short_open / short_close are never retried automatically
+    (a blind retry could duplicate an order).
   * After a successful placement, query the order to confirm its status.
   * If placement fails ambiguously (network error/timeout), look at recent
     orders for that pair before concluding anything; never resend in the
@@ -35,16 +36,29 @@ class PairRule:
     mini_order: float
 
 
+REDUCE_SIDES = ("SELL", "SHORT_CLOSE")
+
+
+class ShortsNotAllowed(Exception):
+    """The exchange refused short selling for this account/competition."""
+
+
 @dataclass
 class Order:
     pair: str
-    side: str            # BUY / SELL
-    qty: str             # already rounded, as sent to the API
+    side: str            # BUY / SELL / SHORT_OPEN / SHORT_CLOSE
+    qty: str             # base quantity as sent ("" = close the whole short)
     price: float         # reference price used for sizing
     reason: str
+    collateral: str = ""     # SHORT_OPEN only: USD collateral as sent
+    value: float = 0.0       # SHORT_CLOSE: USD value being closed (for cash planning)
 
     @property
     def notional(self) -> float:
+        if self.side == "SHORT_OPEN":
+            return float(self.collateral)
+        if self.side == "SHORT_CLOSE" and not self.qty:
+            return self.value
         return float(self.qty) * self.price
 
 
@@ -58,10 +72,15 @@ def round_down(qty: float, precision: int) -> Decimal:
     return q.quantize(step, rounding=ROUND_DOWN) if q > 0 else Decimal(0).quantize(step)
 
 
-def value_portfolio(wallet: dict, prices: Dict[str, float], quote: str = "USD"
-                    ) -> Tuple[float, Dict[str, float], Dict[str, float]]:
-    """Return (equity, total qty per coin, free qty per coin) from a balance wallet."""
-    equity = 0.0
+def value_portfolio(wallet: dict, prices: Dict[str, float], quote: str = "USD",
+                    shorts: Optional[List[dict]] = None) -> Tuple[float, Dict[str, float], Dict[str, float]]:
+    """Return (equity, total qty per coin, free qty per coin) from a balance wallet.
+
+    Verified on the test account (probe_shorts.py): short collateral sits in
+    USD Lock (and is mirrored in ShortCollateral), so a short adds only its
+    UnrealizedPNL here; adding PositionValue would count the collateral twice.
+    """
+    equity = sum(float(p.get("UnrealizedPNL", 0) or 0) for p in (shorts or []))
     total, free = {}, {}
     for asset, a in wallet.items():
         f, lock = float(a.get("Free", 0) or 0), float(a.get("Lock", 0) or 0)
@@ -76,8 +95,20 @@ def value_portfolio(wallet: dict, prices: Dict[str, float], quote: str = "USD"
     return equity, total, free
 
 
+def short_book(shorts: Optional[List[dict]], quote: str = "USD") -> Dict[str, dict]:
+    """{coin: {"qty", "value"}} from /v6/short_positions (value = collateral + PnL)."""
+    out = {}
+    for p in shorts or []:
+        coin = p["Pair"].split("/")[0] if p.get("Pair", "").endswith("/" + quote) else None
+        if coin:
+            out[coin] = {"qty": float(p.get("ShortQty", 0) or 0), "value": float(p.get("PositionValue", 0) or 0)}
+    return out
+
+
 def current_weights(total: Dict[str, float], prices: Dict[str, float], equity: float,
-                    dust_usd: float = settings.DUST_USD) -> Dict[str, float]:
+                    dust_usd: float = settings.DUST_USD, shorts: Optional[Dict[str, dict]] = None
+                    ) -> Dict[str, float]:
+    """Signed weights: longs positive, shorts negative (by PositionValue)."""
     if equity <= 0:
         return {}
     out = {}
@@ -85,16 +116,24 @@ def current_weights(total: Dict[str, float], prices: Dict[str, float], equity: f
         v = qty * prices.get(coin, 0.0)
         if v >= dust_usd:
             out[coin] = v / equity
+    for coin, sh in (shorts or {}).items():
+        if sh["value"] >= dust_usd:
+            out[coin] = out.get(coin, 0.0) - sh["value"] / equity
     return out
 
 
 def plan_orders(target: Dict[str, float], total: Dict[str, float], free: Dict[str, float],
                 prices: Dict[str, float], equity: float, rules: Dict[str, PairRule],
                 band: float = settings.REBALANCE_BAND, quote: str = "USD",
-                min_order_usd: float = settings.MIN_ORDER_USD
-                ) -> Tuple[List[Order], List[str]]:
-    """Orders that move the portfolio toward `target`, sells first. Also returns skip reasons."""
-    cur = current_weights(total, prices, equity)
+                min_order_usd: float = settings.MIN_ORDER_USD,
+                shorts: Optional[Dict[str, dict]] = None) -> Tuple[List[Order], List[str]]:
+    """Orders that move the portfolio toward signed `target` weights.
+
+    Exposure-reducing orders (SELL, SHORT_CLOSE) come first, then BUY and
+    SHORT_OPEN. Also returns human-readable skip reasons.
+    """
+    shorts = shorts or {}
+    cur = current_weights(total, prices, equity, shorts=shorts)
     changes = strategy.rebalance_trades(cur, target, band)
     orders: List[Order] = []
     skips: List[str] = []
@@ -105,44 +144,83 @@ def plan_orders(target: Dict[str, float], total: Dict[str, float], free: Dict[st
         if not px or rule is None:
             skips.append(f"{pair}: no price or exchange rule")
             continue
-        delta_usd = tgt * equity - total.get(coin, 0.0) * px
-        if tgt <= 0:      # full exit: sell everything free
-            qty = round_down(free.get(coin, 0.0), rule.amount_precision)
-            side, reason = "SELL", f"exit (target 0, was {cur.get(coin, 0):.1%})"
-        elif delta_usd < 0:
-            qty = round_down(min(-delta_usd / px, free.get(coin, 0.0)), rule.amount_precision)
-            side, reason = "SELL", f"trim {cur.get(coin, 0):.1%} -> {tgt:.1%}"
-        else:
-            qty = round_down(delta_usd / px, rule.amount_precision)
-            side, reason = "BUY", f"{'enter' if cur.get(coin, 0) == 0 else 'add'} {cur.get(coin, 0):.1%} -> {tgt:.1%}"
-        notional = float(qty) * px
+        c = cur.get(coin, 0.0)
         floor = max(min_order_usd, rule.mini_order)
-        if qty <= 0 or notional <= floor:
-            skips.append(f"{pair}: {side} {qty} (${notional:,.2f}) below minimum ${floor:,.2f} [{reason}]")
-            continue
-        orders.append(Order(pair, side, str(qty), px, reason))
-    orders.sort(key=lambda o: 0 if o.side == "SELL" else 1)
+        long_val = total.get(coin, 0.0) * px
+        sh = shorts.get(coin, {"qty": 0.0, "value": 0.0})
+        tag = f"{c:+.1%} -> {tgt:+.1%}"
+
+        # 1) reduce
+        if c > 0 and tgt < c:
+            if tgt <= 0:
+                qty = round_down(free.get(coin, 0.0), rule.amount_precision)
+                reason = f"exit long {tag}"
+            else:
+                qty = round_down(min((long_val - tgt * equity) / px, free.get(coin, 0.0)), rule.amount_precision)
+                reason = f"trim long {tag}"
+            if qty > 0 and float(qty) * px > floor:
+                orders.append(Order(pair, "SELL", str(qty), px, reason))
+            else:
+                skips.append(f"{pair}: SELL {qty} (${float(qty) * px:,.2f}) below minimum ${floor:,.2f} [{reason}]")
+        elif c < 0 and tgt > c:
+            if tgt >= 0:
+                orders.append(Order(pair, "SHORT_CLOSE", "", px, f"cover short {tag}", value=sh["value"]))
+            else:
+                keep = -tgt * equity
+                frac = 1 - keep / sh["value"] if sh["value"] > 0 else 1.0
+                qty = round_down(sh["qty"] * frac, rule.amount_precision)
+                if qty > 0 and float(qty) * px > floor:
+                    orders.append(Order(pair, "SHORT_CLOSE", str(qty), px, f"trim short {tag}",
+                                        value=sh["value"] * frac))
+                else:
+                    skips.append(f"{pair}: SHORT_CLOSE {qty} below minimum ${floor:,.2f} [trim short {tag}]")
+
+        # 2) add
+        if tgt > 0 and tgt > max(c, 0.0):
+            qty = round_down((tgt * equity - (long_val if c > 0 else 0.0)) / px, rule.amount_precision)
+            reason = f"{'enter' if c <= 0 else 'add'} long {tag}"
+            if qty > 0 and float(qty) * px > floor:
+                orders.append(Order(pair, "BUY", str(qty), px, reason))
+            else:
+                skips.append(f"{pair}: BUY {qty} (${float(qty) * px:,.2f}) below minimum ${floor:,.2f} [{reason}]")
+        elif tgt < 0 and tgt < min(c, 0.0):
+            collat = round_down(-tgt * equity - (sh["value"] if c < 0 else 0.0), 2)
+            reason = f"{'open' if c >= 0 else 'add'} short {tag}"
+            if float(collat) > floor and float(collat) / px >= 10 ** -rule.amount_precision:
+                orders.append(Order(pair, "SHORT_OPEN", "", px, reason, collateral=str(collat)))
+            else:
+                skips.append(f"{pair}: SHORT_OPEN ${collat} below minimum ${floor:,.2f} [{reason}]")
+    orders.sort(key=lambda o: 0 if o.side in REDUCE_SIDES else 1)
     return orders, skips
 
 
 def cap_buys_to_cash(orders: List[Order], usd_free: float, rules: Dict[str, PairRule],
                      fee: float = 0.001, min_order_usd: float = settings.MIN_ORDER_USD
                      ) -> Tuple[List[Order], List[str]]:
-    """Scale buys down so they fit the cash expected after sells (no leverage)."""
-    cash = usd_free + sum(o.notional * (1 - fee) for o in orders if o.side == "SELL")
-    buys = [o for o in orders if o.side == "BUY"]
-    need = sum(o.notional * (1 + fee) for o in buys)
-    if need <= cash * 0.995 or not buys:
+    """Scale BUY and SHORT_OPEN down so they fit the cash expected after reductions (no leverage)."""
+    cash = usd_free + sum(o.notional * (1 - fee) for o in orders if o.side in REDUCE_SIDES)
+    adds = [o for o in orders if o.side not in REDUCE_SIDES]
+    need = sum(o.notional * (1 + fee) for o in adds)
+    if need <= cash * 0.995 or not adds:
         return orders, []
     scale = cash * 0.995 / need
-    out, skips = [o for o in orders if o.side == "SELL"], []
-    for o in buys:
+    out, skips = [o for o in orders if o.side in REDUCE_SIDES], []
+    for o in adds:
         rule = rules[o.pair]
-        qty = round_down(float(o.qty) * scale, rule.amount_precision)
-        if float(qty) * o.price <= max(min_order_usd, rule.mini_order):
-            skips.append(f"{o.pair}: BUY too small after cash cap")
-            continue
-        out.append(Order(o.pair, o.side, str(qty), o.price, o.reason + f" (scaled x{scale:.2f} to cash)"))
+        floor = max(min_order_usd, rule.mini_order)
+        if o.side == "BUY":
+            qty = round_down(float(o.qty) * scale, rule.amount_precision)
+            if float(qty) * o.price <= floor:
+                skips.append(f"{o.pair}: BUY too small after cash cap")
+                continue
+            out.append(Order(o.pair, o.side, str(qty), o.price, o.reason + f" (scaled x{scale:.2f} to cash)"))
+        else:
+            collat = round_down(float(o.collateral) * scale, 2)
+            if float(collat) <= floor:
+                skips.append(f"{o.pair}: SHORT_OPEN too small after cash cap")
+                continue
+            out.append(Order(o.pair, o.side, "", o.price, o.reason + f" (scaled x{scale:.2f} to cash)",
+                             collateral=str(collat)))
     return out, skips
 
 
@@ -195,6 +273,8 @@ class Executor:
 
     def execute(self, order: Order) -> Optional[dict]:
         """Send one order. Returns the confirmed order dict if it filled, else None."""
+        if order.side in ("SHORT_OPEN", "SHORT_CLOSE"):
+            return self._execute_short(order)
         self._log("REQUEST", order)
         if self.dry_run:
             log.info("DRY_RUN %s %s %s (~$%.2f) %s", order.side, order.qty, order.pair,
@@ -264,3 +344,39 @@ class Executor:
         self._log("RECONCILED_NOT_FOUND", order)
         log.warning("reconcile: no matching order; it was not placed")
         return None
+
+    # ------------------------------------------------------------------
+    def _execute_short(self, order: Order) -> Optional[dict]:
+        """Open or close a 1x short. Never retried; an ambiguous failure is
+        resolved by the next cycle, which re-plans from /v6/short_positions."""
+        self._log("REQUEST", order, detail={"collateral": order.collateral} if order.collateral else None)
+        if self.dry_run:
+            log.info("DRY_RUN %s %s %s (~$%.2f) %s", order.side, order.collateral or order.qty or "all",
+                     order.pair, order.notional, order.reason)
+            self._log("DRY_RUN", order, status="FILLED")
+            return {"Status": "FILLED"}
+        try:
+            if order.side == "SHORT_OPEN":
+                resp = self.client.short_open(order.pair, order.collateral)
+                self._log("RESPONSE", order, detail=resp, order_id=resp.get("ID"), status=resp.get("Status"),
+                          filled_qty=resp.get("ShortQty"), avg_price=resp.get("EntryPrice"), fee=resp.get("OpenFee"))
+                ok = resp.get("Status") == "OPEN"
+            else:
+                resp = self.client.short_close(order.pair, order.qty or None)
+                self._log("RESPONSE", order, detail=resp, status="FILLED", filled_qty=resp.get("ClosedQty"),
+                          avg_price=resp.get("ClosePrice"), fee=resp.get("CloseFee"))
+                ok = float(resp.get("ClosedQty", 0) or 0) > 0
+        except RoostooError as exc:
+            msg = str(exc)
+            if "not allow short" in msg:
+                self._log("SHORTS_NOT_ALLOWED", order, detail=msg)
+                log.error("Exchange refuses shorts: %s. Switching to long-only.", msg)
+                raise ShortsNotAllowed(msg) from exc
+            event = "REJECTED" if "rejected" in msg else "AMBIGUOUS"
+            self._log(event, order, detail=msg)
+            log.error("%s %s %s: %s (not retried; next cycle re-plans from real positions)", event,
+                      order.side, order.pair, msg)
+            return None
+        log.info("%s %s %s -> %s", order.side, order.pair, order.collateral or order.qty or "all",
+                 "OK" if ok else "NOT FILLED")
+        return {"Status": "FILLED"} if ok else None

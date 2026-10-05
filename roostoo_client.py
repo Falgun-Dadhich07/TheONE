@@ -186,6 +186,27 @@ class RoostooClient:
             return []
         return self._check(data, "query_order")["OrderMatched"]
 
+    # ------------------------------------------------------------------
+    # Short positions (/v6). Opening/closing are NEVER auto-retried.
+    # ------------------------------------------------------------------
+    def short_open(self, pair: str, collateral: str) -> dict:
+        """Market short sized by USD collateral (quantity = collateral / entry price)."""
+        data = self._request("POST", "/v6/short_open", params={"pair": pair, "collateral": str(collateral)},
+                             signed=True)
+        return self._check(data, f"SHORT_OPEN {pair}")
+
+    def short_close(self, pair: str, close_qty: Optional[str] = None) -> dict:
+        """Close part (close_qty) or all (no size) of the short on `pair`; reduce-only."""
+        params = {"pair": pair}
+        if close_qty is not None:
+            params["close_qty"] = str(close_qty)
+        data = self._request("POST", "/v6/short_close", params=params, signed=True)
+        return self._check(data, f"SHORT_CLOSE {pair}")
+
+    def short_positions(self) -> list:
+        data = self._request("GET", "/v6/short_positions", signed=True, retry=True)
+        return self._check(data, "short_positions").get("Positions", []) or []
+
     def cancel_order(self, order_id: Optional[int] = None, pair: Optional[str] = None) -> list:
         params: dict = {}
         if order_id is not None:

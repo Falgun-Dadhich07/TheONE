@@ -28,7 +28,11 @@ ROOSTOO_COMP_KEY=<competition key>
 ROOSTOO_COMP_SECRET=<competition secret>
 DRY_RUN=false
 CONFIRM_COMPETITION=yes-on-ec2
+STRATEGY=v3
+ALLOW_SHORTS=true
 ```
+
+`STRATEGY=v3` is the 50/50 momentum + Hawkes blend, long/short, on the 20 most liquid coins. `STRATEGY=v1` is the original long-only bot, kept as a rollback.
 
 If the repo is still private, `git clone` asks for a GitHub username and a personal access token (not your password).
 
@@ -39,11 +43,17 @@ cd ~/TheONE
 source .venv/bin/activate
 curl -s "https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=1"
 python -m pytest -q
-DRY_RUN=true timeout 150 python bot.py
+DRY_RUN=true timeout 240 python bot.py
 ```
 
-- The `curl` must print one JSON kline. If Binance is unreachable, the bot still works from its saved bars and its own Roostoo polls, but warm-up needs `data/live_bars.csv`.
-- The dry run must log `warmup: ... (binance)`, an `equity $...` line and `DRY_RUN BUY/SELL ...` lines, with no `ERROR`.
+- The `curl` must print one JSON kline. If Binance is unreachable, the bot still works from its saved data (`data/live_md.pkl`) and its own Roostoo polls, but the first warm-up needs Binance.
+- v3's first warm-up downloads about 1500 hourly bars and 2 years of daily bars for about 64 coins. It takes about 1 minute; computing the HMM regime takes about 20 seconds more. Use `timeout 240` for the dry run on the first start.
+- The dry run must log:
+  - `warmup (64 coins): 1500 hourly bars x 64 coins ... failed: []`;
+  - three `HMM P(bull)` lines;
+  - an `equity $...` line;
+  - `DRY_RUN BUY/SELL/SHORT_OPEN ...` lines;
+  - no `ERROR`.
 
 ## Start the bot (24/7, inside tmux)
 
@@ -102,6 +112,21 @@ source .venv/bin/activate
 tmux new -s bot
 python bot.py
 ```
+
+## Shorts
+
+- v3 opens Roostoo 1x shorts (`/v6/short_open`), sized by USD collateral, only through the bot.
+- If the competition refuses shorts (`this competition does not allow short positions`), the bot logs `SHORTS_NOT_ALLOWED`, sets `shorts_disabled` in `data/bot_state.json` and keeps trading long-only. Nothing needs to be done by hand.
+- Check open shorts: `grep SHORT ~/TheONE/logs/orders.csv | tail`.
+
+## Re-tuning the Hawkes parameters (about every 60 days; not needed during the 14-day contest)
+
+On the laptop, not on EC2:
+
+1. Run `python research/fetch_data.py --refresh`.
+2. Run `python research/tune_hawkes.py`.
+3. Copy the result into `HAWKES_PARAMS` in `settings.py`.
+4. Commit, push, then pull and restart on EC2.
 
 ## Rules to remember
 
