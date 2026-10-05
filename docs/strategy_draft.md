@@ -196,7 +196,40 @@ Results from 40 configurations (full table in `data/analysis/portfolio_report.tx
 
   The results don't change in a consistent direction (vol 60 was worse), so there's no free improvement here.
 
-## 9. Next steps (pending approval)
+## 9. With short positions (`research/short_lab.py`)
+
+Shorts were approved for research on 2026-10-05. The engine models Roostoo's 1x collateral shorts: a 0.1% fee to open and to close, and a loss capped at the collateral.
+
+- **Window:** the same stitched walk-forward out-of-sample (OOS) window as section 7, 14 May 2025 to 4 Oct 2026.
+- **Engine:** the real one, with the kill switch and measured per-coin spreads.
+- **Gate:** "risk-on" means HMM bull and BTC > SMA (23% of hours). "Risk-off" means HMM bear and BTC < SMA (13% of hours).
+
+| Strategy | OOS return | Max DD | Composite | Worst 14d DD | 3M return | 1M return | PBO |
+|---|---|---|---|---|---|---|---|
+| v1 fixed (live bot) | +4.8% | −18.8% | 0.31 | −8.1% | +10.9% | −0.2% | — |
+| v2 long-only, majors | +7.2% | −9.6% | 0.58 | −7.7% | +7.1% | +1.3% | — |
+| v2 long/short, majors | +9.9% | −12.3% | 0.64 | −7.9% | +7.1% | +1.3% | — |
+| v2 long-only, top 20 | +13.0% | −10.2% | 0.98 | −5.3% | +5.6% | +4.9% | — |
+| **v2 long/short, top 20** | **+18.4%** | **−11.7%** | **1.09** | −6.7% | +5.6% | +4.9% | — |
+| v2 short leg only, top 20 | +6.3% | −9.2% | 0.58 | −5.0% | 0.0% | 0.0% | — |
+| Momentum long/short, no gate | −2.9% | −19.5% | −0.06 | −10.3% | +0.6% | −6.2% | — |
+| Beta-neutral momentum (research note) | −13.2% | −18.5% | −1.35 | −5.2% | −2.2% | −2.1% | — |
+| Beta-neutral momentum, HMM-gated | −12.6% | −13.0% | −1.72 | −3.7% | −0.5% | −1.9% | — |
+| Hawkes long/short (PSO walk-forward) | +11.6% | −17.7% | 0.63 | −8.2% | +11.2% | −1.3% | 0.07 |
+| Kalman pairs long/short (PSO walk-forward) | −8.0% | −15.0% | −0.81 | −5.7% | +5.7% | −0.2% | 0.02 |
+
+Findings:
+
+- **Shorting helps only behind the regime gate.** The v2 short leg made +6.3% on its own, active 86 of 509 days, with no shorts wiped out. Always-on long/short momentum lost money.
+- **Market-neutral ideas from the research note lose money,** even with real shorts: beta-neutral momentum at −13% and pairs at −8%. Fees and trend persistence eat the edge.
+- **The Hawkes strategy with real shorts is much better than long-only** (+11.6% vs −1.2%) and has a low PBO (0.07). But it is volatile: −17.7% max DD, five kill switches, and fees of 17% of capital.
+- **No shorting happened in the last 3 months** (bull regime), so the 3M and 1M columns equal long-only.
+- **Best risk-adjusted result: v2 long/short on top 20.** Caveats:
+  - top 20 vs majors was mixed in section 8;
+  - shorting altcoins carries squeeze risk;
+  - the competition account may refuse shorts.
+
+## 10. Next steps (pending approval)
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:
