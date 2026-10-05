@@ -387,13 +387,13 @@ Robustness of the pick at max exposure with a 12% kill switch:
 
 All variants are positive in both halves. K=3 with a 14-day high is the best cell of the grid, so expect less live: about +50% to +60% a year in backtest terms.
 
-**v4 = HMM+SMA-gated long/short on nearness to the 14-day high (top/bottom 3) + Hawkes, 50/50, max exposure, 12% kill switch.** Production backtest (`backtest/run_v3.py`): **+66.9%, -23.4% max DD, composite 1.85**.
+**v4 = HMM+SMA-gated long/short on nearness to the 14-day high (top/bottom 3) + Hawkes, 50/50, max exposure, 12% kill switch.** Production backtest (`backtest/run_v3.py`): **+64.5%, -22.2% max DD, composite 1.83**. Before order processing was made deterministic, the same code gave +66.9% and +69.7% on two runs, so treat about 3 points either way as noise.
 
 Costs and risks of v4:
 - Fees are about 52% of capital over 15 months, at about 10 trades a day.
 - The worst 10-day window is -12.6% (-17% for neighbouring variants), and the worst 14-day drawdown is -18%: gaps overshoot the 12% kill switch.
 - One coin can be 50% of equity, when the Hawkes sleeve has a single active signal.
-- The long-only fallback, if shorts are refused, is +10% with a -26% max DD.
+- The long-only fallback, if shorts are refused, is +9% with a -28% max DD.
 
 ## 15. Next steps
 

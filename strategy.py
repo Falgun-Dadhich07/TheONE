@@ -146,7 +146,7 @@ def rebalance_trades(current: Dict[str, float], target: Dict[str, float],
     than `band`. Returns {coin: target_weight}.
     """
     out = {}
-    for coin in set(current) | set(target):
+    for coin in sorted(set(current) | set(target)):     # sorted: same order every run
         cur, tgt = current.get(coin, 0.0), target.get(coin, 0.0)
         if (cur == 0) != (tgt == 0) or cur * tgt < 0 or abs(tgt - cur) > band:
             out[coin] = tgt

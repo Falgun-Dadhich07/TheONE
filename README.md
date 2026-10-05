@@ -47,10 +47,10 @@ Setup:
 
 | Strategy (deployed settings) | Return | Max DD | Sharpe | Sortino | Calmar | Composite |
 |---|---|---|---|---|---|---|
-| **v4 blend** | **+66.9%** | **-23.4%** | 1.34 | 1.96 | 2.21 | **1.85** |
+| **v4 blend** | **+64.5%** | **-22.2%** | 1.31 | 1.91 | 2.25 | **1.83** |
 | Trend sleeve alone | +55.7% | -33.3% | 1.06 | 1.53 | 1.30 | 1.32 |
 | Hawkes sleeve alone | +21.9% | -41.0% | 0.58 | 0.84 | 0.43 | 0.64 |
-| v4 if shorts are refused (long-only) | +10.0% | -26.2% | 0.41 | 0.58 | 0.31 | 0.45 |
+| v4 if shorts are refused (long-only) | +9.2% | -27.9% | 0.39 | 0.56 | 0.27 | 0.42 |
 | *v3 (14-day-return momentum) at x2 risk* | +36.7% | -21.1% | 1.09 | 1.58 | 1.39 | 1.36 |
 | *Buy & hold BTC, May 2025 to Oct 2026* | -30.0% | -59.0% | - | - | - | -0.52 |
 
