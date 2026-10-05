@@ -330,7 +330,72 @@ Unfilled orders had moved 40–83 bp against us by the time we chased. The savin
 
 **Conclusion.** Trading faster loses money after costs in every family tested. v3 as deployed remains the best strategy found. The only validated improvement is passive execution, worth about +0.15% per 10 days.
 
-## 13. Next steps
+## 13. Factor research: new signal types (`research/factor_lab.py`, `factor_strategy.py`)
+
+Extra public data came from `research/fetch_factors.py`:
+- hourly taker-buy volume and trade counts (64 coins, 2 years);
+- perpetual funding rates (64 coins, 2 years);
+- futures open interest and long/short ratios (30 coins, 13 months).
+
+30 signals were scored by daily cross-sectional rank IC on the causal top-30 universe. To count as stable, a signal needed the same sign in both halves of the sample and |t| > 2.
+
+| Signal group | 24h rank IC (t) | Verdict |
+|---|---|---|
+| Funding rate (last, 3d, 7d, change) | 0.00 to 0.01 (t at most 1.1) | No cross-sectional edge |
+| Taker-buy imbalance (24h, 7d) | -0.01 to 0.00 (t at most 1.0) | None |
+| Open interest change, long/short ratios | abs(t) at most 2.3; one half only, few coins | Not usable |
+| 14-day return (the v3 momentum ranking) | 0.00 (t = -0.2) | Weak at 1 day; 0.04 at 7 days |
+| Short-term returns (1h, 4h) | -0.035 (t = -3.4) | Real reversal, but lost 32-45% a year after costs |
+| Low volatility, low beta, liquidity, negative skew | -0.05 to -0.08 (t -3.6 to -5.8) | Strong IC, but a bear-market bet: long/short lost in the second half |
+| **Nearness to the 14-day high** | **+0.050 (t = 4.1)**; 0.093 at 72h, 0.118 at 7d | **Stable in both halves; quintile long/short +31% a year net** |
+
+Strategies built from these (real engine, x2 risk):
+- **Walk-forward IC-weighted composite of all signals:** it lost 38-44% as a market-neutral long/short, and was +12% to +19% when regime-gated. It mostly learned "risky coins fall", which reversed.
+- **v3 with the momentum sleeve ranked by nearness to the 14-day high:**
+
+  | Variant | Return | Max DD | Composite |
+  |---|---|---|---|
+  | v3 (deployed) | +35.8% | -21.1% | 1.34 |
+  | Top/bottom 2 | +36.3% | - | 1.38 |
+  | Top/bottom 3 | +40.8% | -19.8% | 1.54 |
+  | Top/bottom 5 | +37.1% | - | 1.45 |
+
+  A small, consistent improvement.
+
+## 14. Risk frontier and strategy v4 (`research/risk_frontier.py`)
+
+No signal tested has an edge much above about +0.7% to +1.0% per 10 days at x2 risk. A return-ranked leaderboard rewards upside, so the remaining lever is exposure. The frontier covers Jul 2025 to Oct 2026, with the real engine and 10-day windows:
+
+| Strategy | Exposure | Return | Max DD | Mean 10d | P(10d > +10%) | P(10d < -10%) |
+|---|---|---|---|---|---|---|
+| v3 | x2 (deployed), kill 12% | +36.7% | -21.1% | +0.72% | 3.9% | 0.5% |
+| v3 | max | +20% to +54% (unstable across kill settings) | -26% to -30% | +0.5% to +1.1% | 8-11% | 3-5% |
+| **v3 + high14 (top 3)** | **max** | **+62% to +71% across kill 12% / 20% / none** | **-23% to -26%** | **+1.15% to +1.25%** | **6.6-7.1%** | **2.5-3.0%** |
+
+"max" means vol target 200%, 100% per coin per sleeve and 100% gross, so the caps decide and the book is fully invested whenever signals are active. There is never any leverage.
+
+Robustness of the pick at max exposure with a 12% kill switch:
+
+| Variant | Return | Max DD | First half | Second half | 2026 |
+|---|---|---|---|---|---|
+| K=2 | +55.4% | -28.7% | +36.2% | +15.5% | +12.7% |
+| **K=3 (v4)** | **+72.7%** | **-22.0%** | +26.3% | +26.3% | +32.0% |
+| K=4 | +71.7% | -22.4% | +36.6% | +24.4% | +29.8% |
+| K=5 | +51.0% | -25.3% | +37.2% | +11.4% | +18.0% |
+| 10-day high, K=3 | +46.0% | -24.3% | +34.5% | +7.7% | +12.5% |
+| 21-day high, K=3 | +63.0% | -22.8% | +27.2% | +25.3% | +27.9% |
+
+All variants are positive in both halves. K=3 with a 14-day high is the best cell of the grid, so expect less live: about +50% to +60% a year in backtest terms.
+
+**v4 = HMM+SMA-gated long/short on nearness to the 14-day high (top/bottom 3) + Hawkes, 50/50, max exposure, 12% kill switch.** Production backtest (`backtest/run_v3.py`): **+66.9%, -23.4% max DD, composite 1.85**.
+
+Costs and risks of v4:
+- Fees are about 52% of capital over 15 months, at about 10 trades a day.
+- The worst 10-day window is -12.6% (-17% for neighbouring variants), and the worst 14-day drawdown is -18%: gaps overshoot the 12% kill switch.
+- One coin can be 50% of equity, when the Hawkes sleeve has a single active signal.
+- The long-only fallback, if shorts are refused, is +10% with a -26% max DD.
+
+## 15. Next steps
 
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.

@@ -29,10 +29,12 @@ DRY_RUN = _env_bool("DRY_RUN", True)          # default SAFE: log orders, send n
 COMPETITION_CONFIRM_VALUE = "yes-on-ec2"
 
 # --- Universe & strategy ----------------------------------------------------
-# STRATEGY = "v3"  : 50/50 blend of HMM+SMA-gated long/short momentum and Hawkes
-#                    long/short on the 20 most liquid coins (docs/strategy_draft.md s.9-10)
+# STRATEGY = "v4"  : v3 with the momentum sleeve ranked by nearness to the 14-day high,
+#                    top/bottom 3 (docs/strategy_draft.md s.13-14)
+# STRATEGY = "v3"  : 50/50 blend of HMM+SMA-gated long/short 14-day-return momentum (top/bottom 2)
+#                    and Hawkes long/short on the 20 most liquid coins (s.9-10)
 # STRATEGY = "v1"  : original long-only momentum on the 6 majors (rollback option)
-STRATEGY = os.getenv("STRATEGY", "v3").strip().lower()
+STRATEGY = os.getenv("STRATEGY", "v4").strip().lower()
 UNIVERSE = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]       # v1 universe
 QUOTE = "USD"
 STRATEGY_PARAMS = {"lookback": 336, "regime_sma": 480, "top_n": 2}   # v1
@@ -41,6 +43,8 @@ STRATEGY_PARAMS = {"lookback": 336, "regime_sma": 480, "top_n": 2}   # v1
 V3_TOP_N = 20                 # liquid universe size (trailing 30-day median Binance volume)
 V3_REGIME_SMA = 480           # BTC SMA gate, hours
 V3_HAWKES_SHARE = 0.5         # capital split: 0.5 Hawkes / 0.5 momentum
+V3_RANK_BY = "high" if STRATEGY == "v4" else "return"   # momentum sleeve ranking
+V3_K = 3 if STRATEGY == "v4" else 2                      # coins per side in the momentum sleeve
 ALLOW_SHORTS = _env_bool("ALLOW_SHORTS", True)
 # Tuned by research/tune_hawkes.py on 2026-04-07..2026-10-04 (majors, PSO, composite objective).
 # Re-tune about every 60 days (the tested walk-forward step).
@@ -52,11 +56,19 @@ NON_CRYPTO = {"PAXG", "AMDB", "CBRSB", "COINB", "CRCLB", "GLWB", "GOOGLB", "INTC
               "TSLAB", "WDCB", "TON", "OMNI"}
 
 # --- Position sizing (shared with backtest) --------------------------------
-# Risk level raised 2026-10-05 at the team lead's request (research/aggressive_lab.py rule pick:
-# max mean 10-day return with worst 10-day >= -12%). Was 0.25 / 0.25 / 0.50 and an 8% kill switch.
-TARGET_VOL = 0.50          # annualized portfolio vol target
+# Risk history (each step requested by the team lead; research in docs/strategy_draft.md):
+#   start        vol 0.25, 25%/coin, 50% gross, kill 8%
+#   2026-10-05   vol 0.50, 40%/coin, 100% gross, kill 12%   (s.11)
+#   2026-10-05   vol 2.00, 100%/coin, 100% gross, kill 12%  (s.14: fully invested whenever
+#                signals are active; the caps bind, not the vol target; never leverage)
+# The risk level is tied to the strategy so a rollback also rolls back the risk.
+if STRATEGY == "v4":
+    TARGET_VOL = 2.00      # annualized vol target per sleeve side (so high the caps decide)
+    MAX_PER_COIN = 1.00    # fraction of equity per sleeve (a coin in one sleeve is <= 50% of equity)
+else:
+    TARGET_VOL = 0.50
+    MAX_PER_COIN = 0.40
 VOL_LOOKBACK = 168         # hours
-MAX_PER_COIN = 0.40        # fraction of equity
 MAX_GROSS = 1.00           # total |long| + |short| exposure cap (never leverage)
 REBALANCE_HOUR = 0         # UTC hour of the bar whose close triggers the daily rebalance
 REBALANCE_BAND = 0.05      # min weight change worth trading

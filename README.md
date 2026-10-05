@@ -2,7 +2,7 @@
 
 A long/short crypto bot for the Roostoo mock exchange. It blends two uncorrelated signals and aims for **risk-adjusted** return (the final score is 0.4·Sortino + 0.3·Sharpe + 0.3·Calmar), so it keeps drawdowns small and holds cash when neither signal is active.
 
-## 1. Strategy (v3)
+## 1. Strategy (v4)
 
 **Universe:** the 20 most liquid crypto pairs on Roostoo. The list is recomputed daily from the trailing 30-day median Binance volume, using past data only. A coin needs at least 60 days of history; tokenized stocks are excluded.
 
@@ -10,7 +10,7 @@ Capital is split **50/50** between two sleeves:
 
 | Sleeve | Signal | When long | When short |
 |---|---|---|---|
-| **Momentum** (daily, 00:00 UTC) | 14-day return rank, gated by the market regime | top-2 coins with positive 14-day return, while risk-on | bottom-2 coins with negative 14-day return, while risk-off |
+| **Trend** (daily, 00:00 UTC) | nearness to the 14-day high, gated by the market regime. It predicted next-day returns far better than raw 14-day return (rank IC 0.05, t = 4.1, stable in both halves of 2 years) | the 3 coins closest to their 14-day high, while risk-on | the 3 coins furthest below it, while risk-off |
 | **Hawkes volatility** (hourly) | per coin: volatility goes quiet (below its 1st percentile), then breaks out (above its 99th percentile) | the price rose since the quiet point | the price fell since the quiet point |
 
 **Market regime:** both of these must agree.
@@ -19,9 +19,10 @@ Capital is split **50/50** between two sleeves:
 
 "Risk-on" means P(bull) > 0.5 and BTC is above its average. "Risk-off" means P(bull) < 0.5 and BTC is below its average. Otherwise the momentum sleeve is in cash.
 
-**Position sizing (raised for more profit on 2026-10-05, see `docs/strategy_draft.md` s.11):**
-- inverse volatility per side, aiming for 50% annualized volatility;
-- caps: 40% per coin, 100% gross (|long| + |short|), never leverage;
+**Position sizing (maximum-exposure setting, chosen for a return-ranked leaderboard; see `docs/strategy_draft.md` s.14):**
+- inverse volatility per side; the caps decide the size (the volatility target is set too high to bind);
+- up to 100% gross (|long| + |short|), never leverage;
+- one coin can reach 50% of equity when the Hawkes sleeve has a single active signal;
 - sized as a % of live total equity.
 
 **Shorts:** Roostoo 1x collateral shorts (`/v6/short_open`), with the loss capped at the collateral. If the exchange refuses shorts, the bot switches to long-only automatically.
@@ -34,7 +35,7 @@ Capital is split **50/50** between two sleeves:
 
 **Activity guarantee:** if there are fewer than `MIN_TRADES_PER_DAY` fills by 20:00 UTC, the bot buys about $15 of BTC and sells it straight back.
 
-All tunables are in [`settings.py`](settings.py). `STRATEGY=v1` rolls back to the original long-only bot. The research behind every choice, including the strategies that lost, is in [`docs/strategy_draft.md`](docs/strategy_draft.md).
+All tunables are in [`settings.py`](settings.py). `STRATEGY=v3` rolls back to the 14-day-return momentum version, and `STRATEGY=v1` to the original long-only bot. The research behind every choice, including the strategies that lost, is in [`docs/strategy_draft.md`](docs/strategy_draft.md).
 
 ### Backtest of the production code (`python backtest/run_v3.py`)
 
@@ -44,40 +45,44 @@ Setup:
 - the kill switch on;
 - Hawkes parameters re-tuned by walk-forward PSO, with each fold's parameters used only out-of-sample.
 
-| Strategy (deployed risk settings) | Return | Max DD | Sharpe | Sortino | Calmar | Composite |
+| Strategy (deployed settings) | Return | Max DD | Sharpe | Sortino | Calmar | Composite |
 |---|---|---|---|---|---|---|
-| **v3 blend** | **+37.3%** | **−21.1%** | 1.09 | 1.58 | 1.40 | **1.38** |
-| Momentum sleeve alone | +25.1% | −22.1% | 0.76 | 1.10 | 0.90 | 0.94 |
-| Hawkes sleeve alone | +10.8% | −31.5% | 0.42 | 0.60 | 0.28 | 0.45 |
-| v3 if shorts are refused (long-only) | +9.6% | −26.8% | 0.42 | 0.60 | 0.29 | 0.45 |
-| *Buy & hold BTC, May 2025 to Oct 2026* | −30.0% | −59.0% | — | — | — | −0.52 |
+| **v4 blend** | **+66.9%** | **-23.4%** | 1.34 | 1.96 | 2.21 | **1.85** |
+| Trend sleeve alone | +55.7% | -33.3% | 1.06 | 1.53 | 1.30 | 1.32 |
+| Hawkes sleeve alone | +21.9% | -41.0% | 0.58 | 0.84 | 0.43 | 0.64 |
+| v4 if shorts are refused (long-only) | +10.0% | -26.2% | 0.41 | 0.58 | 0.31 | 0.45 |
+| *v3 (14-day-return momentum) at x2 risk* | +36.7% | -21.1% | 1.09 | 1.58 | 1.39 | 1.36 |
+| *Buy & hold BTC, May 2025 to Oct 2026* | -30.0% | -59.0% | - | - | - | -0.52 |
 
-**Per 10 days (439 windows):**
+**Per 10 days (research run, 439 windows):**
 
 | | Return |
 |---|---|
-| Mean | +0.73% |
-| Median | +0.40% |
-| Top decile | +6.8% |
-| Bottom decile | −4.4% |
-| Best | +17.9% |
-| Worst | −10.4% |
+| Mean | +1.27% |
+| Median | +0.90% |
+| Top decile | +8.0% |
+| Bottom decile | -5.3% |
+| Worst | -12.6% |
 
 | Chance over 10 days | |
 |---|---|
-| Gain above +5% | 16% |
-| Loss worse than −5% | 6.8% |
+| Gain above +10% | 6.6% |
+| Loss worse than -5% | 11.9% |
+| Loss worse than -10% | 2.5% |
+
+Neighbouring variants (2 to 5 coins, 10- to 21-day highs) made +46% to +73% and were positive in both halves of the period.
 
 Faster trading (3- to 7-day momentum, 4- to 12-hour rebalancing) was tested and earned **less**: fees outweighed any edge.
 
-At the earlier, lower risk settings (25% volatility, 50% gross), the blend made +18.4% with a −12.2% max drawdown.
+At lower risk settings, v3 made +18.4% with a -12.2% max drawdown (25% volatility, 50% gross) and +36.7% with a -21.1% max drawdown (50% volatility, 100% gross cap).
 
 Honest caveats:
 - It's one 15-month sample.
 - With a single refit calendar, the momentum sleeve's return ranged from +8.6% to +26.1%. Averaging over 6 calendars removes that luck, but it shows the uncertainty.
 - The Hawkes parameters changed a lot between walk-forward folds.
-- Fees are about 29% of capital over 15 months, at about 7 trades a day.
-- Fast moves can overshoot the kill switch within the hour; the worst 14-day drawdown was −14%.
+- Fees are about 52% of capital over 15 months, at about 10 trades a day.
+- Fast moves can overshoot the kill switch within the hour; the worst 14-day drawdown was -18%.
+- K=3 with a 14-day high is the best cell of the grid tested, so live results should be lower.
 - The fallback without shorts is much weaker.
 
 ## 2. Architecture

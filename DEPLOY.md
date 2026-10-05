@@ -28,11 +28,11 @@ ROOSTOO_COMP_KEY=<competition key>
 ROOSTOO_COMP_SECRET=<competition secret>
 DRY_RUN=false
 CONFIRM_COMPETITION=yes-on-ec2
-STRATEGY=v3
+STRATEGY=v4
 ALLOW_SHORTS=true
 ```
 
-`STRATEGY=v3` is the 50/50 momentum + Hawkes blend, long/short, on the 20 most liquid coins. `STRATEGY=v1` is the original long-only bot, kept as a rollback.
+`STRATEGY=v4` is the 50/50 blend of the nearness-to-14-day-high trend sleeve and Hawkes, long/short, on the 20 most liquid coins, at maximum exposure. `STRATEGY=v3` (14-day-return momentum) and `STRATEGY=v1` (original long-only bot) are kept as rollbacks.
 
 If the repo is still private, `git clone` asks for a GitHub username and a personal access token (not your password).
 

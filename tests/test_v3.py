@@ -134,3 +134,26 @@ def test_executor_raises_shorts_not_allowed(tmp_path):
     with pytest.raises(ShortsNotAllowed):
         ex.execute(Order("BTC/USD", "SHORT_OPEN", "", 80_000, "test", collateral="100"))
     assert "SHORTS_NOT_ALLOWED" in (tmp_path / "orders.csv").read_text()
+
+
+def test_v4_high_ranking_is_causal_and_picks_coins_near_their_high():
+    close, high, low, dqv = synthetic()
+    prob = pd.Series(np.where(np.arange(len(close)) % 700 < 350, 0.8, 0.2), index=close.index)
+
+    def w4(c, h, l, q, p):
+        return strategy.v3_weights(c, h, l, q, p, PARAMS, 0.5, top_n=6, regime_sma=240, rank_by="high", k=3)
+
+    full = w4(close, high, low, dqv, prob)
+    cut = 2200
+    part = w4(close.iloc[:cut], high.iloc[:cut], low.iloc[:cut], dqv.loc[: close.index[cut - 1].normalize()],
+              prob.iloc[:cut])
+    pd.testing.assert_frame_equal(part, full.iloc[:cut], check_freq=False)
+
+    # sleeve alone: in a risk-on market it holds exactly the 3 coins nearest their 14-day high
+    el = pd.DataFrame(True, index=close.index, columns=close.columns)
+    on = pd.Series(True, index=close.index)
+    sleeve = strategy.high_long_short(close, high, el, on, ~on, k=3)
+    t = close.index[close.index.hour == 0][-1]
+    score = (close.loc[t] / high.rolling(336).max().loc[t] - 1)
+    assert set(sleeve.loc[t][sleeve.loc[t] > 0].index) == set(score.sort_values(ascending=False).index[:3])
+    assert (sleeve >= 0).all().all()

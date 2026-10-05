@@ -79,7 +79,8 @@ def v3_target(close: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, daily_
     dqv = daily_qv.reindex(daily_qv.index.union(pd.DatetimeIndex([today])))
     prob = regime.hourly(pd.Series(bull_by_day, dtype=float).sort_index(), close.index)
     w = strategy.v3_weights(close, high, low, dqv, prob, settings.HAWKES_PARAMS, settings.V3_HAWKES_SHARE,
-                            settings.V3_TOP_N, settings.V3_REGIME_SMA, allow_shorts=allow_shorts)
+                            settings.V3_TOP_N, settings.V3_REGIME_SMA, allow_shorts=allow_shorts,
+                            rank_by=settings.V3_RANK_BY, k=settings.V3_K)
     row = w.iloc[-1]
     return {c: float(v) for c, v in row.items() if abs(v) > 1e-6}
 
@@ -90,7 +91,7 @@ class Bot:
         self.stop = False
         self.client = RoostooClient(min_interval=settings.API_MIN_INTERVAL_S)
         self.exec = Executor(self.client, config.MODE, settings.DRY_RUN)
-        self.v3 = settings.STRATEGY == "v3"
+        self.v3 = settings.STRATEGY in ("v3", "v4")
         self.bars: Optional[HourlyBars] = None
         self.md: Optional[MarketData] = None
         self.risk = RiskManager(settings.MAX_DRAWDOWN, settings.KILL_COOLDOWN_HOURS, settings.STOP_VOL_MULT)

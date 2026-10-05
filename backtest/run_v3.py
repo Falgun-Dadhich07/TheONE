@@ -79,7 +79,10 @@ def main() -> None:
     sma = S.btc_regime(px, settings.V3_REGIME_SMA)
     on = (prob > 0.5).fillna(False) & sma
     off = (prob < 0.5).fillna(False) & ~sma
-    mom = S.momentum_long_short(px, eligible, on, off)
+    if settings.V3_RANK_BY == "high":
+        mom = S.high_long_short(px, d["high"].ffill(), eligible, on, off, k=settings.V3_K)
+    else:
+        mom = S.momentum_long_short(px, eligible, on, off, k=settings.V3_K)
 
     folds = json.load(open(os.path.join(OUT_DIR, "short_lab_folds.json")))["folds"]["hawkes_ls_wfo"]
     hawk = pd.DataFrame(0.0, index=c.index, columns=c.columns)
@@ -91,12 +94,12 @@ def main() -> None:
         hawk.loc[m] = w.loc[m]
     blend = S.v3_blend(mom, hawk, settings.V3_HAWKES_SHARE)
     end = c.index[-1]
-    rows = {"v3 validation (walk-forward Hawkes params)": evaluate(d, blend, EVAL_START, end),
+    rows = {f"{settings.STRATEGY} validation (walk-forward Hawkes params)": evaluate(d, blend, EVAL_START, end),
             "  momentum sleeve": evaluate(d, mom, EVAL_START, end),
             "  hawkes sleeve": evaluate(d, hawk, EVAL_START, end),
-            "v3 long-only fallback (shorts refused)": evaluate(d, blend.clip(lower=0), EVAL_START, end)}
+            f"{settings.STRATEGY} long-only fallback (shorts refused)": evaluate(d, blend.clip(lower=0), EVAL_START, end)}
     live = S.v3_weights(c, d["high"], d["low"], dqv, prob, settings.HAWKES_PARAMS, settings.V3_HAWKES_SHARE,
-                        settings.V3_TOP_N, settings.V3_REGIME_SMA)
+                        settings.V3_TOP_N, settings.V3_REGIME_SMA, rank_by=settings.V3_RANK_BY, k=settings.V3_K)
     month = (end - pd.Timedelta(days=30)).floor("D")
     rows["deployed params, last 30d (in-sample!)"] = evaluate(d, live, month, end)
     pd.set_option("display.width", 250)

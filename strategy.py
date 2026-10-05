@@ -194,6 +194,21 @@ def momentum_long_short(closes: pd.DataFrame, eligible: pd.DataFrame, risk_on: p
     return hold_until_rebalance(size_long_short(top, bot, closes))
 
 
+def high_long_short(closes: pd.DataFrame, high: pd.DataFrame, eligible: pd.DataFrame, risk_on: pd.Series,
+                    risk_off: pd.Series, lookback: int = 336, k: int = 3) -> pd.DataFrame:
+    """Daily: long the k eligible coins closest to their `lookback`-hour high while
+    risk_on; short the k furthest below it while risk_off; else cash.
+
+    Nearness to the recent high predicted next-day cross-sectional returns far
+    better than raw 14-day return (rank IC 0.05, t = 4.1, same sign in both
+    halves of 2 years, vs ~0 for 14-day return): research/factor_lab.py.
+    """
+    score = (closes / high.rolling(lookback).max() - 1).where(eligible)
+    top = (score.rank(axis=1, ascending=False) <= k) & risk_on.to_numpy()[:, None]
+    bot = (score.rank(axis=1, ascending=True) <= k) & risk_off.to_numpy()[:, None]
+    return hold_until_rebalance(size_long_short(top, bot, closes))
+
+
 def hawkes_volatility(high: np.ndarray, low: np.ndarray, close: np.ndarray, kappa: float,
                       norm_lookback: int) -> np.ndarray:
     """kappa * Hawkes-smoothed (high - low) / ATR, all in log prices. Arrays are T x N."""
@@ -249,15 +264,23 @@ def v3_blend(momentum_w: pd.DataFrame, hawkes_w: pd.DataFrame, hawkes_share: flo
 
 def v3_weights(closes: pd.DataFrame, high: pd.DataFrame, low: pd.DataFrame, daily_quote_volume: pd.DataFrame,
                bull_prob_hourly: pd.Series, hawkes_params: Dict[str, float], hawkes_share: float = 0.5,
-               top_n: int = 20, regime_sma: int = 480, allow_shorts: bool = True) -> pd.DataFrame:
-    """Full v3 target weights (signed). Causal: row t uses data up to bar t only."""
+               top_n: int = 20, regime_sma: int = 480, allow_shorts: bool = True,
+               rank_by: str = "return", k: int = 2) -> pd.DataFrame:
+    """Full v3/v4 target weights (signed). Causal: row t uses data up to bar t only.
+
+    rank_by="return", k=2 : v3 (14-day return momentum sleeve)
+    rank_by="high",   k=3 : v4 (nearness to the 14-day high)
+    """
     available = closes.notna() & high.notna() & low.notna()
     px = closes.ffill()
     eligible = liquid_universe(available, daily_quote_volume, top_n)
     sma = btc_regime(px, regime_sma)
     on = (bull_prob_hourly > 0.5).fillna(False) & sma
     off = (bull_prob_hourly < 0.5).fillna(False) & ~sma
-    mom = momentum_long_short(px, eligible, on, off)
+    if rank_by == "high":
+        mom = high_long_short(px, high.ffill(), eligible, on, off, k=k)
+    else:
+        mom = momentum_long_short(px, eligible, on, off, k=k)
     hawk = hawkes_long_short(high.ffill(), low.ffill(), px, eligible, **hawkes_params)
     w = v3_blend(mom, hawk, hawkes_share)
     if not allow_shorts:
