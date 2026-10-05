@@ -157,7 +157,46 @@ How to read this:
 - Requiring **both** the HMM and the SMA to be risk-on roughly halves max drawdown in both refit settings.
 - Caveat: this is one 17-month stretch, and v1's own lookback/top-N were chosen on data overlapping it.
 
-## 8. Next steps (pending approval)
+## 8. Portfolio construction: which coins, how many, how to size (`research/portfolio_lab.py`)
+
+Setup: the v2 signal (14-day momentum, risk-on only if the BTC HMM bull probability is above 0.5 **and** BTC is above its 480h SMA), with a daily rebalance.
+
+- **Universe:** either the 6 majors, or the top 20 / top 40 coins by trailing 30-day median daily volume. The liquid list is recomputed daily using past data only, and a coin needs at least 60 days of history.
+- **Costs:** 0.1% fee plus each coin's **measured Roostoo half-spread**, with a 2 bp floor. Spreads range from 0 bp (BTC) to 17–25 bp (PEPE, SHIB, BONK, LISTA), because of tick size.
+- **Selection rule, fixed before the run:** best in-sample composite among configurations whose worst 14-day drawdown is better than −10%.
+- **Periods:** in-sample (IS) is Apr 2025 to Jul 2026, holdout (HO) is Jul to Oct 2026, and 1M is the last month.
+
+Results from 40 configurations (full table in `data/analysis/portfolio_report.txt`):
+
+- **Holding more coins is consistently worse.** In-sample composite, K = 2 / 5 / 10 / 15:
+  - majors: 0.75 / 0.38
+  - top 20: 0.99 / 0.11 / 0.26 / 0.78
+  - top 40: 0.95 / 0.52 / −0.07 / −0.05
+
+  Momentum's edge sits in the top 1–2 coins; extra names add weak signals and fees.
+- **Covariance-based sizing doesn't beat simple inverse volatility.** Equal risk contribution, minimum variance and covariance-scaled inverse vol were below `invvol_c1` in nearly every row, and minimum variance was the worst. Correlations between coins are too unstable over a 30-day window.
+- **A wider universe is a mixed bag.**
+
+  | Universe (K=2, invvol_c1) | IS | HO | 1M |
+  |---|---|---|---|
+  | top 20 | +10.3% / −8.3% DD | +5.6% | +4.9% |
+  | majors | +8.2% / −9.6% DD | +7.1% | +1.3% |
+  | top 40 | — | −3.6% | — |
+
+  The top 40 universe lost money in the holdout; small coins hurt.
+- **Exposure is the real lever, but it's a risk choice.** The book is in cash most of the time, so average exposure is only about 6–10% in-sample. Raising the vol target, per-coin cap and gross cap from 25/25/50% to 40/40/80% (majors):
+
+  | Metric | 25/25/50% | 40/40/80% |
+  |---|---|---|
+  | IS return | +8.2% | +16.0% |
+  | IS max DD | −9.6% | −14.6% |
+  | IS composite | 0.75 | 0.93 |
+  | HO return | +7.1% | +10.9% |
+  | Worst 14-day DD | — | −12% (worse than the 8% kill switch) |
+
+  The results don't change in a consistent direction (vol 60 was worse), so there's no free improvement here.
+
+## 9. Next steps (pending approval)
 
 1. Build the proper backtest engine (`backtest/engine.py`): next-bar-open fills, 0.1% fee plus half-spread, multi-asset target weights, Sharpe/Sortino/Calmar/composite, and rolling 14-day windows.
 2. Backtest the draft against the alternatives in one table, losers included:

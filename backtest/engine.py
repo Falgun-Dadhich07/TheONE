@@ -5,7 +5,8 @@ and the audit in docs/strategy_draft.md). Rules:
 
   * Weights computed from data up to the close of bar t are executed at the
     OPEN of bar t+1 (no lookahead).
-  * Every fill pays the taker fee plus half the spread on its notional.
+  * Every fill pays the taker fee plus half the spread on its notional
+    (half_spread can be one number or a per-coin mapping).
   * Sells execute before buys; buys are limited to available cash
     (no leverage, no shorting).
   * Trade decisions use strategy.rebalance_trades, the same rule the live bot uses.
@@ -35,7 +36,7 @@ class Result:
 
 
 def run(opens: pd.DataFrame, closes: pd.DataFrame, target: pd.DataFrame,
-        initial: float = 100_000.0, fee: float = TAKER_FEE, half_spread: float = HALF_SPREAD,
+        initial: float = 100_000.0, fee: float = TAKER_FEE, half_spread=HALF_SPREAD,
         band: float = strategy.REBALANCE_BAND, risk=None,
         daily_vol: Optional[pd.DataFrame] = None) -> Result:
     coins = list(closes.columns)
@@ -51,7 +52,10 @@ def run(opens: pd.DataFrame, closes: pd.DataFrame, target: pd.DataFrame,
     held_w = np.zeros((n, len(coins)))
     fees_paid = 0.0
     trades = []
-    cost = fee + half_spread
+    if isinstance(half_spread, (int, float)):
+        costs = np.full(len(coins), fee + half_spread)
+    else:  # per-coin mapping; unknown coins get the default
+        costs = np.array([fee + float(half_spread.get(c, HALF_SPREAD)) for c in coins])
     adj = tw.copy()  # target actually executed at the next open (after risk overlay)
     dv = daily_vol[coins].reindex(idx).to_numpy() if daily_vol is not None else None
 
@@ -73,16 +77,16 @@ def run(opens: pd.DataFrame, closes: pd.DataFrame, target: pd.DataFrame,
                 if delta_notional < 0:
                     sell_qty = min(qty[i], -delta_notional / px[i])
                     gross = sell_qty * px[i]
-                    f = gross * cost
+                    f = gross * costs[i]
                     cash += gross - f
                     qty[i] -= sell_qty
                     fees_paid += f
                     trades.append((idx[t], coin, "SELL", sell_qty, px[i], f))
                 elif delta_notional > 0:
-                    spend = min(delta_notional, cash / (1 + cost))
+                    spend = min(delta_notional, cash / (1 + costs[i]))
                     if spend <= 0:
                         continue
-                    f = spend * cost
+                    f = spend * costs[i]
                     cash -= spend + f
                     qty[i] += spend / px[i]
                     fees_paid += f
