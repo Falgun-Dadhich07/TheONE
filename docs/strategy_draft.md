@@ -412,6 +412,22 @@ The whole edge is the fill assumption. With a real order queue the same orders l
 
 v4's signal was also run at v3's exposure (vol 0.50, 40% per coin): +37.5%, -20.5% max DD, composite 1.43, against v3's +36.7%, -21.1%, 1.36. So nearly all of v4's extra return comes from exposure, not from the ranking.
 
+**Best scalp search** (`research/scalp_lab.py`). Each variant was chosen on the first 20 days and reported on the last 10, unseen days.
+
+| Coin | Maker ladder, touch fills (per day, % of position) | Maker ladder, trade-through fills | Best taker scalp, net per trade |
+|---|---|---|---|
+| PEPE | +39.0% | -0.2% (stops trading) | -100 bp |
+| BONK | +21.0% | 0.0% | +5 bp |
+| SHIB | +10.8% | -0.1% | -49 bp |
+| WLFI | +3.4% | -0.3% | +1 bp |
+| STO | +0.5% | -0.4% | -53 bp |
+| LISTA | -0.5% | -0.7% | +23 bp |
+| DOGE / BTC | not applicable (tick 1 bp or less) | not applicable | -12 bp / -36 bp |
+
+- With touch fills the best ladder is the simplest one: buy one tick below the last close, sell one tick higher.
+- With trade-through fills no variant makes money; the search ends up picking variants that almost never trade.
+- Taker scalps (momentum or reversal on 5- to 60-minute moves) do not cover their 20-46 bp round-trip cost out of sample. The few positive cells are within noise (150-250 overlapping signals).
+
 ## 16. Next steps
 
 
