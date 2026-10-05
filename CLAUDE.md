@@ -85,3 +85,10 @@ Sources: Official FAQ, AWS guide, and Data Sources Pack (Notion pages linked fro
 - The Data Sources Pack lists Binance Vision (data.binance.vision, free, recommended), CryptoDataDownload (free CSVs), and CoinAPI (paid). It states no usage rules.
 - The FAQ mentions Binance blocking US regions. EC2 is in Sydney, but reachability must still be verified from the instance.
 - Repo state on 2026-10-04: there was no `backtest/` or `docs/` folder. The legacy backtester was pasted into the chat (audit in the Phase A plan).
+
+## Decision log
+
+- 2026-10-05: The team lead approved **considering short positions** (overriding "keep shorts off" above) because Roostoo supports them (`/v6/short_open`, `/v6/short_close`, `/v6/short_positions`).
+  - Shorts are 1x: sized by USD collateral, 0.1% fee to open and to close, loss capped at the collateral.
+  - The API can return `this competition does not allow short positions`, so the bot must handle that and fall back to long-only.
+  - Deploying any short-selling strategy still needs explicit approval.

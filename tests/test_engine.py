@@ -56,3 +56,37 @@ def test_engine_applies_risk_overlay():
     assert metrics.max_drawdown(guarded.equity) > -0.10
     assert metrics.max_drawdown(plain.equity) < -0.25
     assert guarded.extra["risk_events"][0][1] == "KILL_SWITCH"
+
+
+def test_short_profits_when_price_falls_and_pays_fees():
+    prices = frame([100, 100, 90, 80, 80])
+    target = frame([-0.5] * 5)
+    res = engine.run(prices, prices, target, initial=1000, band=0.5)
+    cost = engine.TAKER_FEE + engine.HALF_SPREAD
+    assert res.trades.iloc[0]["side"] == "SHORT"
+    # 500 collateral at 100 -> 5 units; at 80 worth 500 + 5*20 = 600
+    assert res.equity.iloc[-1] == pytest.approx(1000 - 500 * cost + 100)
+    assert res.weights.iloc[-1, 0] < 0
+
+
+def test_short_loss_capped_at_collateral():
+    prices = frame([100, 100, 150, 250, 300])
+    target = frame([-0.5] * 5)
+    # band=1.0: never top up the losing short. Price gaps 150 -> 250 (> 2x entry):
+    # the first short loses exactly its 500 collateral, then a fresh short opens at 250.
+    res = engine.run(prices, prices, target, initial=1000, band=1.0)
+    cost = engine.TAKER_FEE + engine.HALF_SPREAD
+    sides = list(res.trades["side"])
+    assert sides[:3] == ["SHORT", "SHORT_WIPED", "SHORT"]
+    cash_after_wipe = 1000 - 500 - 500 * cost
+    new_collateral = 0.5 * cash_after_wipe
+    assert res.equity.iloc[3] == pytest.approx(cash_after_wipe - new_collateral * cost)
+    assert res.equity.min() > 0
+
+
+def test_flip_long_to_short_closes_first():
+    prices = frame([100] * 4)
+    target = frame([0.5, -0.5, -0.5, -0.5])
+    res = engine.run(prices, prices, target, initial=1000, band=0.05)
+    assert list(res.trades["side"]) == ["BUY", "SELL", "SHORT"]
+    assert res.weights.iloc[-1, 0] == pytest.approx(-0.5, rel=0.01)

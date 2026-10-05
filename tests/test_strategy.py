@@ -55,3 +55,10 @@ def test_rebalance_trades_band():
     out = strategy.rebalance_trades(cur, tgt, band=0.05)
     assert out == {"ETH": 0.0, "SOL": 0.15}          # BTC change too small
     assert strategy.rebalance_trades(cur, {"BTC": 0.30, "ETH": 0.10}, 0.05) == {"BTC": 0.30}
+
+
+def test_rebalance_trades_signed():
+    assert strategy.rebalance_trades({}, {"BTC": -0.2}) == {"BTC": -0.2}
+    assert strategy.rebalance_trades({"BTC": -0.2}, {}) == {"BTC": 0.0}
+    assert strategy.rebalance_trades({"BTC": 0.2}, {"BTC": -0.2}) == {"BTC": -0.2}
+    assert strategy.rebalance_trades({"BTC": -0.20}, {"BTC": -0.22}) == {}

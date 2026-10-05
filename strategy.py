@@ -141,13 +141,14 @@ def rebalance_trades(current: Dict[str, float], target: Dict[str, float],
                      band: float = REBALANCE_BAND) -> Dict[str, float]:
     """Weight changes to execute, shared by live bot and backtester.
 
-    Full exits and fresh entries always trade; otherwise only trade when the
-    weight is off by more than `band`. Returns {coin: target_weight}.
+    Weights are signed (negative = short). Full exits, fresh entries and side
+    flips always trade; otherwise only trade when the weight is off by more
+    than `band`. Returns {coin: target_weight}.
     """
     out = {}
     for coin in set(current) | set(target):
         cur, tgt = current.get(coin, 0.0), target.get(coin, 0.0)
-        if tgt <= 0 < cur or (cur <= 0 < tgt) or abs(tgt - cur) > band:
+        if (cur == 0) != (tgt == 0) or cur * tgt < 0 or abs(tgt - cur) > band:
             out[coin] = tgt
     return out
 
