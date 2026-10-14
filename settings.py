@@ -29,12 +29,13 @@ DRY_RUN = _env_bool("DRY_RUN", True)          # default SAFE: log orders, send n
 COMPETITION_CONFIRM_VALUE = "yes-on-ec2"
 
 # --- Universe & strategy ----------------------------------------------------
-# STRATEGY = "v4"  : v3 with the momentum sleeve ranked by nearness to the 14-day high,
-#                    top/bottom 3 (docs/strategy_draft.md s.13-14)
-# STRATEGY = "v3"  : 50/50 blend of HMM+SMA-gated long/short 14-day-return momentum (top/bottom 2)
-#                    and Hawkes long/short on the 20 most liquid coins (s.9-10)
+# STRATEGY = "v3"  : DEPLOYED on the competition account. 50/50 blend of HMM+SMA-gated long/short
+#                    14-day-return momentum (top/bottom 2) and Hawkes long/short on the 20 most
+#                    liquid coins (docs/strategy_draft.md s.9-11)
+# STRATEGY = "v4"  : research variant, not deployed: momentum sleeve ranked by nearness to the
+#                    14-day high, top/bottom 3, maximum exposure (s.13-15)
 # STRATEGY = "v1"  : original long-only momentum on the 6 majors (rollback option)
-STRATEGY = os.getenv("STRATEGY", "v4").strip().lower()
+STRATEGY = os.getenv("STRATEGY", "v3").strip().lower()
 UNIVERSE = ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"]       # v1 universe
 QUOTE = "USD"
 STRATEGY_PARAMS = {"lookback": 336, "regime_sma": 480, "top_n": 2}   # v1
